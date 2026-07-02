@@ -1,0 +1,32 @@
+# Python/cache output
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+
+# Local virtual environments
+.venv/
+venv/
+env/
+
+# Generated release/build output
+build/
+dist/
+dist_nuitka_build/
+dist_nuitka_debug_build/
+*.spec
+
+# Temporary patch/extract/download folders
+.tmp*/
+*.tmp
+
+# Local monitor runtime state
+battle_monitor/profiles/
+battle_monitor/startup.log
+battle_monitor/startup_error.log
+
+# Machine-local OCR/runtime binaries; rerun prepare_portable_tesseract.bat per machine
+battle_monitor/vendor/tesseract/
+
+# Optional local archives/backups
+archives/

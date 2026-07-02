@@ -1,0 +1,1355 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="icon" href="/static/favicon.ico">
+  <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="/static/app_mobile.css">
+  <title>Pokémon Type Effectiveness</title>
+  <style>
+    :root {
+      --page-bg: #111827;
+      --header-height-desktop: 205px;
+      --header-height-mobile: 275px;
+      --content-gap: 18px;
+    }
+
+    html, body {
+      min-height: 100%;
+      background: var(--page-bg) !important;
+    }
+
+    html {
+      min-height: 100%;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      justify-content: flex-start;
+    }
+
+    body::after {
+      content: "";
+      display: block;
+      height: 140px; /* breathing room below scrollable cards */
+    }
+
+
+    /* Progress bar */
+    @keyframes progress {
+      0% { width: 0; }
+      100% { width: 100%; }
+    }
+    .progress-bar {
+      width: 100%;
+      height: 10px;
+      border-radius: 9999px;
+      background: #3b82f6;
+      animation: progress 2s linear infinite;
+    }
+
+    .hidden {
+      display: none !important;
+    }
+
+    /* Fixed header */
+    header {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      width: 100%;
+      background: var(--page-bg);
+      padding: 1rem 0;
+      z-index: 1000;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      box-shadow: 0 2px 4px rgba(0, 0, 0, 0.5);
+    }
+
+    .watermark-fixed {
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      font-size: 0.75rem;
+      color: #a0aec0;
+    }
+
+    /* Input + suggestions */
+    .input-container {
+      position: relative;
+      width: 100%;
+      max-width: 450px;
+    }
+    .input-field {
+      width: 100%;
+      padding: 8px;
+      border: 1px solid #fff; /* white border for clarity */
+      border-radius: 4px;
+      background: #fff;
+      color: #000;
+    }
+    .suggestions {
+      position: absolute;
+      top: 100%;
+      left: 0;
+      width: 100%;
+      background: #fff;
+      color: #000;
+      border: 1px solid #ccc;
+      box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+      display: none;
+      z-index: 1001;
+      margin-top: 2px;
+      max-height: 200px;
+      overflow-y: auto;
+    }
+    .suggestions li {
+      list-style: none;
+      padding: 8px;
+      cursor: pointer;
+      border-bottom: 1px solid #eee;
+    }
+    .suggestions li:last-child {
+      border-bottom: none;
+    }
+    .suggestions li.highlighted,
+    .suggestions li:hover {
+      background: #BFC2BA;
+    }
+
+    /* Controls */
+    .control-buttons {
+      margin-top: 2rem;
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      justify-content: center;
+    }
+
+    /* Layout */
+    .container {
+      display: flex;
+      flex-direction: row;
+      max-width: 1200px;
+      width: 100%;
+      margin: 0 auto;
+      padding-top: calc(var(--header-height-desktop) + var(--content-gap));
+      gap: 2rem;
+      align-items: flex-start;
+    }
+
+    /* History cards styling */
+    .small-card {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      background: #374151;
+      color: #fff;
+      padding: 0.25rem 0.5rem;
+      margin-bottom: 0.25rem;
+      font-size: 0.875rem;
+      width: 100%;
+      box-sizing: border-box;
+      border-radius: 0.25rem;
+    }
+    .small-card button {
+      background: transparent;
+      border: none;
+      color: white;
+      text-align: left;
+      flex: 1;
+      padding: 0.25rem 0;
+      cursor: pointer;
+    }
+
+    .result-card {
+      background: #1f2937; /* gray-800 */
+      color: white;
+      padding: 1rem;
+      border-radius: 0.5rem;
+      box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      position: relative;
+      max-width: 500px;
+      width: 90vw;
+      min-width: 280px;
+      scroll-snap-align: start;
+    }
+
+    .card-slot-label,
+    .mode-helper,
+    .history-note {
+      display: none !important;
+    }
+
+    .minimize-button,
+    .close-button {
+      position: absolute;
+      width: 24px;
+      height: 24px;
+      border: none;
+      border-radius: 50%;
+      color: #fff;
+      cursor: pointer;
+    }
+    .minimize-button {
+      top: 10px;
+      right: 40px;
+      background: #6b7280;
+    }
+    .close-button {
+      top: 10px;
+      right: 10px;
+      background: #ef4444;
+    }
+
+    .result-card img {
+      width: 100px;
+      height: 100px;
+    }
+    .type-badge {
+      display: inline-block;
+      padding: 0.25rem 0.5rem;
+      border-radius: 0.3rem;
+      font-weight: bold;
+      margin: 0.2rem;
+      color: #fff;
+      text-transform: capitalize;
+    }
+
+    .separator {
+      width: 100%;
+      height: 1px;
+      background: #374151;
+      margin: 0.5rem 0;
+    }
+    .effectiveness-row {
+      display: flex;
+      width: 100%;
+      align-items: flex-start;
+    }
+    .effectiveness-label {
+      width: 100px;
+      font-weight: bold;
+      text-transform: capitalize;
+    }
+    .effectiveness-content {
+      flex: 1;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.5rem;
+    }
+
+    .neutral-dropdown {
+      width: 100%;
+      display: grid;
+      grid-template-columns: 100px minmax(0, 1fr);
+      align-items: start;
+      column-gap: 0;
+    }
+
+    .neutral-dropdown summary {
+      list-style: none;
+      cursor: pointer;
+      grid-column: 1;
+    }
+
+    .neutral-dropdown summary::-webkit-details-marker {
+      display: none;
+    }
+
+    .neutral-summary {
+      display: block;
+      width: 100%;
+      min-height: 2rem;
+    }
+
+    .neutral-summary-control {
+      display: flex;
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 0.25rem;
+    }
+
+    .neutral-summary .effectiveness-label {
+      width: auto;
+      display: block;
+    }
+
+    .neutral-action {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.35rem;
+      color: #bfdbfe;
+      white-space: nowrap;
+      font-size: 0.86rem;
+      font-weight: 700;
+      line-height: 1.15;
+      user-select: none;
+    }
+
+    .neutral-caret {
+      display: inline-block;
+      color: #93c5fd;
+      font-size: 0.75rem;
+      line-height: 1;
+      transform: rotate(0deg);
+      transition: transform 0.15s ease;
+    }
+
+    .neutral-count-open {
+      display: none;
+    }
+
+    .neutral-dropdown[open] .neutral-caret {
+      transform: rotate(90deg);
+    }
+
+    .neutral-dropdown[open] .neutral-count-collapsed {
+      display: none;
+    }
+
+    .neutral-dropdown[open] .neutral-count-open {
+      display: inline;
+    }
+
+    .neutral-summary:hover .neutral-action {
+      color: #e5e7eb;
+    }
+
+    .neutral-content {
+      grid-column: 2;
+      margin: 0;
+      padding: 0.1rem 0 0.2rem 0;
+      background: transparent;
+      border: 0;
+      border-radius: 0;
+    }
+
+    .neutral-dropdown:not([open]) .neutral-content {
+      display: none !important;
+    }
+
+    .error-message-fixed {
+      position: absolute;
+      top: 80px;
+      left: 10px;
+      right: 10px;
+      z-index: 1001;
+    }
+
+    .delete-history-item {
+      background: #ef4444;
+      color: #ffffff; /* brighter white */
+      border: none;
+      border-radius: 9999px;
+      width: 20px;
+      height: 20px;
+      line-height: 20px;
+      text-align: center;
+      font-size: 14px;
+      margin-left: 8px;
+      cursor: pointer;
+      display: inline-block;
+      font-weight: bold; /* makes the "×" pop */
+    }
+    .delete-history-item:hover {
+      background: #dc2626;
+      color: #fff;
+    }
+
+    @media (max-width: 640px) {
+      html {
+        scroll-padding-top: 16px;
+      }
+
+      body {
+        padding-top: 0 !important;
+        align-items: stretch !important;
+        min-height: 100svh;
+      }
+
+      header {
+        position: sticky;
+        height: auto;
+        min-height: 0;
+        padding: 0.65rem 0.75rem 0.85rem;
+      }
+
+      header h1 {
+        margin: 0.35rem 0 0.65rem !important;
+      }
+
+      .container {
+        flex-direction: column;
+        margin-top: 0;
+        padding-top: 1rem !important;
+        gap: 1rem;
+        width: 100%;
+      }
+
+      .mode-toggle-container {
+        margin-top: 1rem;
+        display: flex;
+        justify-content: center;
+      }
+
+      #main-result {
+        position: relative;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 1rem;
+        padding: 0 0.75rem;
+        margin-left: 0;
+      }
+      
+      body.dual-mode {
+        padding-top: 0 !important;
+      }
+
+      #main-result::after {
+        content: '';
+        display: block;
+        height: 4rem; /* padding below cards */
+      }
+
+      #history {
+        position: fixed;
+        bottom: 90px;
+        left: 20px;
+        right: 20px;
+        background: #1f2937;
+        padding: 0.5rem;
+        border-radius: 0.5rem;
+        max-height: 300px;
+        overflow-y: auto;
+        z-index: 999;
+        transition: all 0.3s ease;
+      }
+
+      .input-field {
+        padding: 7px;
+        font-size: 12px;
+      }
+
+      .control-buttons button,
+      #toggle-mode-btn {
+        padding: 4px 5px;
+        font-size: 12px;
+      }
+
+      .result-card {
+        width: 95vw;
+        max-width: 95vw;
+        min-width: unset;
+        font-size: 0.9rem; /* Optional: reduce text slightly */
+        margin: 0 auto;
+      }
+      .effectiveness-row {
+        display: flex;
+        flex-direction: row;
+        align-items: flex-start;
+        flex-wrap: wrap;
+      }
+      .effectiveness-label {
+        flex: 0 0 110px; /* fixed label width */
+        margin-bottom: 0;
+      }
+      .effectiveness-content {
+        flex: 1;
+        margin-left: -110px; /* pulls it back to align with label */
+        padding-left: 110px; /* indents wrapped lines */
+        box-sizing: border-box;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.25rem;
+      }
+
+      .neutral-dropdown {
+        display: grid !important;
+        grid-template-columns: 110px minmax(0, 1fr);
+        align-items: start;
+        width: 100%;
+        min-height: 0 !important;
+        padding: 0 !important;
+      }
+
+      .neutral-dropdown summary {
+        display: block !important;
+        grid-column: 1;
+        width: 110px;
+        min-height: 0 !important;
+        margin: 0 !important;
+        padding: 0 !important;
+      }
+
+      .neutral-summary {
+        width: 110px;
+        min-height: 0 !important;
+        margin: 0 !important;
+      }
+
+      .neutral-summary-control {
+        display: inline-flex !important;
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 0.28rem;
+        line-height: 1.15;
+      }
+
+      .neutral-summary .effectiveness-label {
+        flex: none;
+        width: auto;
+        margin: 0;
+      }
+
+      .neutral-action {
+        font-size: 0.95rem;
+        line-height: 1.15;
+        margin: 0 !important;
+        padding: 0 !important;
+      }
+
+      .neutral-dropdown:not([open]) {
+        max-height: none;
+        overflow: visible;
+      }
+
+      .neutral-dropdown:not([open]) .neutral-content {
+        display: none !important;
+      }
+
+      .neutral-content {
+        grid-column: 2;
+        display: flex;
+        width: 100%;
+        margin: 0 !important;
+        padding: 0 !important;
+        box-sizing: border-box;
+        gap: 0.35rem;
+        justify-content: flex-start;
+        margin-left: 0 !important;
+        padding-left: 0 !important;
+      }
+
+      header h1 {
+        margin-top: 0.4rem;
+      }
+      .hidden-history {
+        display: none !important;
+      }
+
+      #history.mobile-history-open {
+        display: block !important;
+      }
+
+      .history-title {
+        display: none;
+      }
+    }
+
+
+    /* Desktop hide mobile toggle */
+    @media (min-width: 641px) {
+      body {
+        padding-top: 0;
+      }
+
+      #toggle-history-btn {
+        display: none !important;
+      }
+
+      .container {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 2rem;
+        max-width: 1200px;
+        width: 100%;
+        margin: 0 auto;
+        padding-top: calc(var(--header-height-desktop) + var(--content-gap));
+      }
+      .history-title {
+        font-size: 1rem;
+        font-weight: bold;
+        color: #E5E7EB; /* Tailwind gray-200 */
+        margin-bottom: 0.75rem;
+        text-align: center;
+        position: relative;
+        z-index: 1;
+      }
+      #history {
+        width: 220px;
+        flex-shrink: 0;
+        position: sticky;
+        top: calc(var(--header-height-desktop) + var(--content-gap));
+        background: #1f2937;
+        padding: 0.5rem;
+        border-radius: 0.5rem;
+        max-height: calc(100vh - var(--header-height-desktop) - 40px);
+        overflow-y: auto;
+        display: block; /* Ensure it isn't being hidden by display:none */
+        margin-left: -100px;
+        margin-top: 0;
+      }
+
+      #history-items:empty::before {
+        content: 'No history yet';
+        display: block;
+        color: #9CA3AF; /* Tailwind gray-400 */
+        text-align: center;
+        margin-top: 1rem;
+        font-size: 0.9rem;
+      }
+
+      #main-result {
+        flex: 1;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 1rem;
+        justify-content: center;
+        align-items: flex-start;
+        margin-top: 0;
+        min-height: 675px;
+        margin-left: -150px;
+      }
+      
+    }
+
+
+
+    /* Robust mobile override for iOS/Safari and narrow browsers.
+       Keeps the search area at the top, hides History until the button is tapped,
+       and prevents the result cards from being pushed below a large blank area. */
+    @media (max-width: 900px), (hover: none) and (pointer: coarse) {
+      html, body {
+        min-height: 100svh !important;
+        overflow-x: hidden !important;
+        scroll-padding-top: 0 !important;
+      }
+
+      body {
+        display: flex !important;
+        flex-direction: column !important;
+        align-items: stretch !important;
+        justify-content: flex-start !important;
+        padding-top: 0 !important;
+      }
+
+      body::after {
+        height: 2rem !important;
+      }
+
+      header {
+        position: relative !important;
+        top: auto !important;
+        left: auto !important;
+        right: auto !important;
+        width: 100% !important;
+        padding: 0.85rem 0.75rem 0.95rem !important;
+      }
+
+      header h1 {
+        margin: 0.45rem 0 0.8rem !important;
+        font-size: clamp(1.8rem, 8vw, 2.6rem) !important;
+        line-height: 1.05 !important;
+      }
+
+      .watermark-fixed {
+        position: static !important;
+        text-align: center !important;
+        margin: 0.15rem 0 0.25rem !important;
+      }
+
+      .control-buttons {
+        margin-top: 0.4rem !important;
+        margin-bottom: 0.65rem !important;
+      }
+
+      .input-container {
+        width: min(100%, calc(100vw - 28px)) !important;
+        max-width: none !important;
+      }
+
+      .container {
+        display: block !important;
+        width: 100% !important;
+        max-width: 100vw !important;
+        margin: 0 !important;
+        padding: 0.85rem 0 0 !important;
+      }
+
+      #main-result {
+        display: flex !important;
+        flex-direction: column !important;
+        align-items: center !important;
+        justify-content: flex-start !important;
+        gap: 1rem !important;
+        width: 100% !important;
+        max-width: 100vw !important;
+        min-height: 0 !important;
+        margin: 0 !important;
+        padding: 0 0.75rem 1.25rem !important;
+      }
+
+      #main-result:empty {
+        min-height: 0 !important;
+      }
+
+      #main-result::after {
+        height: 1.5rem !important;
+      }
+
+      #history {
+        display: none !important;
+        position: fixed !important;
+        bottom: 90px !important;
+        left: 18px !important;
+        right: 18px !important;
+        max-height: min(300px, 50svh) !important;
+        overflow-y: auto !important;
+        z-index: 1005 !important;
+      }
+
+      #history:not(.hidden-history),
+      #history.mobile-history-open {
+        display: block !important;
+      }
+    }
+
+    /* Type badge colors */
+    .type-normal { background: #A8A77A; }
+    .type-fire { background: #EE8130; }
+    .type-water { background: #6390F0; }
+    .type-electric { background: #F7D02C; }
+    .type-grass { background: #7AC74C; }
+    .type-ice { background: #96D9D6; }
+    .type-fighting { background: #C22E28; }
+    .type-poison { background: #A33EA1; }
+    .type-ground { background: #E2BF65; }
+    .type-flying { background: #A98FF3; }
+    .type-psychic { background: #F95587; }
+    .type-bug { background: #A6B91A; }
+    .type-rock { background: #B6A136; }
+    .type-ghost { background: #735797; }
+    .type-dragon { background: #6F35FC; }
+    .type-dark { background: #705746; }
+    .type-steel { background: #C0C0C0; }
+    .type-fairy { background: #D685AD; }
+    .type-none { background: #4B5563; }
+  </style>
+</head>
+<body class="text-white flex flex-col items-center min-h-full w-full">
+  <header>
+    <div class="watermark-fixed">Created by BorderM</div>
+    <h1 class="text-3xl font-bold text-white text-center mb-2" style="margin-bottom: -25px;">
+      Pokémon Type Effectiveness
+    </h1>
+    <div class="control-buttons">
+      <button id="search-btn" class="bg-blue-500 text-white p-2 rounded-lg">Search</button>
+      <button id="clear-btn" class="bg-gray-500 text-white p-2 rounded-lg">Clear</button>
+      <a href="/pokedex" class="bg-purple-500 text-white p-2 rounded-lg">Pokédex</a>
+      <a href="/stats" class="bg-yellow-500 text-white p-2 rounded-lg">Stats</a>
+      <a href="/typecalculator" class="bg-red-500 text-white p-2 rounded-lg">Type Calcs</a>
+      <a href="/natures" class="bg-cyan-500 text-white p-2 rounded-lg">Natures</a>
+      <a href="/evolutions" class="bg-orange-500 text-white p-2 rounded-lg">Evolutions</a>
+    </div>
+    <div class="input-container mt-2">
+      <input id="pokemon-input" class="input-field" placeholder="Enter Pokémon Name" autocomplete="off">
+      <ul id="suggestions" class="suggestions"></ul>
+    </div>
+     <div class="mode-toggle-container mt-2">
+      <button id="toggle-mode-btn" class="bg-indigo-500 text-white p-2 rounded">2v2</button>
+    </div>
+    <div id="mode-helper" class="mode-helper"></div>
+    <div id="progress-bar-container" class="hidden">
+      <div class="progress-bar"></div>
+    </div>
+    <div id="error-message" class="error-message-fixed"></div>
+  </header>
+  <button id="toggle-history-btn" class="fixed bottom-7 right-6 bg-blue-500 text-white p-3 rounded-full shadow-lg z-50 sm:hidden">
+    📜
+  </button>
+  <div class="container">
+    <aside id="history" class="hidden-history">
+      <div class="history-title">History</div>
+      <div class="history-items"></div>
+      </aside>
+    <section id="main-result"></section>
+  </div>
+
+  <script>
+    document.addEventListener('DOMContentLoaded', () => {
+      if ('scrollRestoration' in history) history.scrollRestoration = 'manual';
+      if (window.matchMedia('(max-width: 900px), (hover: none) and (pointer: coarse)').matches) {
+        setTimeout(() => window.scrollTo(0, 0), 0);
+      }
+      const INITIAL_NAME = {{ initial_name|tojson }};
+      // State & config
+      let PROCESSED_CACHE = {};
+      let ALL_POKEMON = [];
+      let REF_MAP = null;
+      let COLLAPSED = {};
+      let historyList = JSON.parse(localStorage.getItem('pkmnHistory') || '[]');
+      let currentPokemon = null;
+      let dualMode = JSON.parse(localStorage.getItem('pkmnDualMode') || 'false');
+      const MAX_HISTORY = 12;
+      let suggestionKeys = [];
+      let selectedIndex = null;
+      let lastChosenSuggestionKey = null;
+
+      // DOM elements
+      const input = document.getElementById('pokemon-input');
+      const suggestionsBox = document.getElementById('suggestions');
+      const searchBtn = document.getElementById('search-btn');
+      const clearBtn = document.getElementById('clear-btn');
+      const toggleBtn = document.getElementById('toggle-mode-btn');
+      const historyBtn = document.getElementById('toggle-history-btn');
+      const modeHelper = document.getElementById('mode-helper');
+      const mainResult = document.getElementById('main-result');
+
+      const cardObserver = new MutationObserver(() => refreshCardSlots());
+      cardObserver.observe(mainResult, { childList: true });
+
+      // Fetch data
+      Promise.all([
+        fetch('/static/pokemon_reference_map_types.json').then(r => r.json()),
+        fetch('/static/processed_pokemon_cache.json').then(r => r.json())
+      ]).then(([refMap, cache]) => {
+        REF_MAP = refMap;
+        POKEMON_REFERENCE_MAP = refMap;;
+        cache.forEach(p => PROCESSED_CACHE[p.name] = p);
+        ALL_POKEMON = Object.values(PROCESSED_CACHE);
+        ALL_POKEMON.forEach(p => {
+          const c = collapseKey(p.name);
+          COLLAPSED[c] = COLLAPSED[c] || [];
+          COLLAPSED[c].push(p.name);
+        });
+        start();
+        restoreState();
+        if (INITIAL_NAME && String(INITIAL_NAME).trim()) {
+          input.value = INITIAL_NAME;
+          performSearch();
+        }
+      });
+
+      function start() {
+        // Functions that rely on POKEMON_REFERENCE_MAP
+        function collapseKey(rawKey) {
+          const key = String(rawKey || '').toLowerCase();
+          const entry = POKEMON_REFERENCE_MAP?.[key];
+          return entry?.type_key || entry?.collapse_display_name_to || key;
+        }
+      }
+
+      // Utility functions
+      function collapseKey(rawKey) {
+        const key = String(rawKey || '').toLowerCase();
+        const entry = POKEMON_REFERENCE_MAP?.[key];
+        return entry?.type_key || entry?.collapse_display_name_to || key;
+    }
+
+      function pickRepresentative(canon) {
+        return (COLLAPSED[canon] || [canon])[0];
+      }
+
+      function formatDisplayName(key) {
+        const lc = String(key || '').toLowerCase();
+        const entry = POKEMON_REFERENCE_MAP?.[lc];
+        if (entry?.type_display) return entry.type_display;
+
+        return lc
+            .replace(/-/g, ' ')
+            .split(' ')
+            .filter(Boolean)
+            .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+            .join(' ');
+    }
+
+      function pokemonIdentity(r) {
+        return String(r?.lookup_key || r?.context_key || r?.name || r?.display_name || '').toLowerCase();
+      }
+
+      function pokemonDisplay(r) {
+        return r?.display_name || formatDisplayName(r?.lookup_key || r?.context_key || r?.name);
+      }
+
+      function updateModeHelper() {
+        if (modeHelper) modeHelper.textContent = '';
+        toggleBtn.title = dualMode ? 'Switch to 1v1' : 'Switch to 2v2';
+      }
+
+      function refreshCardSlots() {
+        const cards = [...document.getElementById('main-result').children];
+        cards.forEach((card, idx) => {
+          const label = card.querySelector('.card-slot-label');
+          if (!label) return;
+          if (dualMode) {
+            label.textContent = idx === 0 ? 'Active 1 • Older' : 'Active 2 • Newer';
+          } else {
+            label.textContent = 'Active';
+          }
+        });
+      }
+
+      function getSuggestions(query) {
+        const q = query.trim().toLowerCase();
+        if (!q) return [];
+        const byKey = new Map();
+        ALL_POKEMON.forEach(p => {
+          const meta = POKEMON_REFERENCE_MAP?.[p.name] || {};
+          if (meta.searchable === false) return;
+          const c = collapseKey(p.name);
+          const display = meta.type_display || formatDisplayName(c);
+          const haystack = [p.name, p.display_name, meta.raw_display, meta.form_display, meta.species_display, display, c]
+            .filter(Boolean).join(' ').toLowerCase().replace(/-/g, ' ');
+          const normalizedQ = q.replace(/-/g, ' ');
+          if (haystack.includes(normalizedQ)) byKey.set(c, display);
+        });
+        return Array.from(byKey.entries())
+          .sort((a, b) => a[1].localeCompare(b[1]))
+          .slice(0, 10)
+          .map(([key]) => key);
+      }
+
+      // Input & suggestions handling
+      input.addEventListener('input', () => {
+        const list = getSuggestions(input.value);
+        suggestionKeys = list;
+        selectedIndex = 0;
+        suggestionsBox.innerHTML = list
+          .map((key, i) => `
+            <li class="${i === selectedIndex ? 'highlighted' : ''}">
+              ${formatDisplayName(key)}
+            </li>
+          `)
+          .join('');
+        Array.from(suggestionsBox.children).forEach((li, idx) => {
+          li.onclick = () => chooseSuggestion(idx);
+        });
+        suggestionsBox.style.display = list.length ? 'block' : 'none';
+      });
+
+      input.addEventListener('keydown', e => {
+        const items = Array.from(suggestionsBox.children);
+        if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+          e.preventDefault();
+          if (!items.length) return;
+          items[selectedIndex]?.classList.remove('highlighted');
+          selectedIndex = (
+            selectedIndex + (e.key === 'ArrowDown' ? 1 : -1) +
+            items.length
+          ) % items.length;
+          items[selectedIndex].classList.add('highlighted');
+        } else if (e.key === 'Enter') {
+            e.preventDefault();
+            if (suggestionKeys.length) chooseSuggestion(selectedIndex);
+            else performSearch();
+          }
+      });
+
+      function toggleMode() {
+        const wasDualMode = dualMode;
+        dualMode = !dualMode;
+        toggleBtn.textContent = dualMode ? '1v1' : '2v2';
+        document.body.classList.toggle('dual-mode', dualMode);
+
+        const main = document.getElementById('main-result');
+
+        // 2v2 → 1v1: keep the newer card visible and move the older card to History.
+        // Cards are appended left-to-right, so the first card is the older one.
+        if (wasDualMode && !dualMode && main.children.length > 1) {
+          const older = JSON.parse(main.children[0].dataset.pokemon);
+          main.removeChild(main.children[0]);
+          addToHistory(older);
+        }
+
+        // 1v1 → 2v2 intentionally does not pull a card from History automatically.
+        // This keeps the movement predictable: search or click a History item to fill slot 2.
+        updateModeHelper();
+        refreshCardSlots();
+        saveState();
+      }
+
+      function chooseSuggestion(idx) {
+        const key = suggestionKeys[idx];
+        if (!key) return;
+
+        lastChosenSuggestionKey = key; // <- This is important
+        input.value = formatDisplayName(key);
+        selectedIndex = 0;
+        suggestionsBox.style.display = 'none';
+
+        setTimeout(() => performSearch(), 0);
+      }
+
+      // Button handlers
+      searchBtn.addEventListener('click', performSearch);
+      clearBtn.addEventListener('click', clearAll);
+      toggleBtn.addEventListener('click', toggleMode);
+      historyBtn.addEventListener('click', () => {
+        const h = document.getElementById('history');
+        h.classList.toggle('hidden-history');
+        h.classList.toggle('mobile-history-open', !h.classList.contains('hidden-history'));
+      });
+
+      // Fetch & render Pokémon
+      function performSearch() {
+        let canon = null;
+
+        // If a suggestion was chosen manually, use that
+        if (lastChosenSuggestionKey) {
+          canon = lastChosenSuggestionKey;
+          lastChosenSuggestionKey = null; // reset it after use
+        } else {
+          const query = input.value.trim();
+          if (!query) return;
+          canon = suggestionKeys.length ? suggestionKeys[0] : collapseKey(query);
+        }
+
+        const rep = pickRepresentative(canon);
+
+        const alreadyDisplayed = [...document.getElementById('main-result').children].some(
+          c => (JSON.parse(c.dataset.pokemon).lookup_key || JSON.parse(c.dataset.pokemon).display_name) === canon
+        );
+        if (alreadyDisplayed) {
+          input.value = '';
+          input.focus();
+          suggestionsBox.style.display = 'none';
+          return;
+        }
+
+        showProgress(true);
+        fetch(`/api/pokemon/info?name=${encodeURIComponent(rep)}&context=types`)
+          .then(res => res.json().then(data => {
+            if (res.ok) renderPokemon(data[0]);
+            else showError(data.error);
+          }))
+          .finally(() => {
+            showProgress(false);
+            input.value = '';
+            suggestionsBox.style.display = 'none';
+          });
+      }
+
+      function renderPokemon(r) {
+        r.lookup_key = r.context_key || collapseKey(r.name);
+        r.display_name = r.context_display || formatDisplayName(r.lookup_key);
+        const main = document.getElementById('main-result');
+        const cards = [...main.children].map(c => JSON.parse(c.dataset.pokemon));
+
+        const isInResult = cards.some(p => (p.lookup_key || p.display_name) === r.lookup_key);
+        const isInHistory = historyList.some(p => (p.lookup_key || p.display_name) === r.lookup_key);
+
+        if (isInResult) return; // Skip if already showing
+
+        if (isInHistory) {
+          // Move from history to result
+          removeFromHistory(r);
+          if (dualMode && cards.length >= 2) {
+            const removed = cards[0];
+            main.removeChild(main.children[0]);
+            addToHistory(removed);
+          } else if (!dualMode && cards.length === 1) {
+            const removed = cards[0];
+            main.removeChild(main.children[0]);
+            addToHistory(removed);
+          }
+          main.appendChild(createCard(r));
+        } else {
+          // Fresh search
+          if (dualMode && cards.length >= 2) {
+            const removed = cards[0];
+            main.removeChild(main.children[0]);
+            addToHistory(removed);
+          } else if (!dualMode && cards.length === 1) {
+            const removed = cards[0];
+            main.removeChild(main.children[0]);
+            addToHistory(removed);
+          }
+          main.appendChild(createCard(r));
+        }
+
+        currentPokemon = r;
+        saveState();
+        if (window.matchMedia('(max-width: 900px), (hover: none) and (pointer: coarse)').matches) {
+          const lastCard = main.lastElementChild;
+          if (lastCard) setTimeout(() => lastCard.scrollIntoView({ behavior: 'smooth', block: 'start' }), 50);
+        }
+      }
+
+      function renderSingle(r) {
+        const main = document.getElementById('main-result');
+        if (main.children.length > 0) {
+          const removed = JSON.parse(main.removeChild(main.children[0]).dataset.pokemon);
+          addToHistory(removed);
+        }
+        main.innerHTML = '';
+        main.appendChild(createCard(r));
+      }
+
+      function renderDual(r) {
+        const main = document.getElementById('main-result');
+        if (main.children.length >= 2) {
+          const removed = JSON.parse(main.removeChild(main.children[0]).dataset.pokemon);
+          addToHistory(removed);
+        }
+
+        const exists = [...main.children].some(
+          c => (JSON.parse(c.dataset.pokemon).lookup_key || JSON.parse(c.dataset.pokemon).display_name) === (r.lookup_key || r.display_name)
+        );
+        if (!exists) main.appendChild(createCard(r));
+      }
+
+      function createCard(r) {
+        const d = document.createElement('div');
+        d.className = 'result-card';
+        d.dataset.pokemon = JSON.stringify(r);
+        const displayName = pokemonDisplay(r);
+        const localSprite = r.sprite_url || `/static/sprites/${r.lookup_key || r.context_key || r.name}.png`;
+        const fallbackSprite = `https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/${r.id}.png`;
+        const profileUrl = `/pokemon/${encodeURIComponent(r.profile_key || r.lookup_key || r.context_key || r.name)}`;
+        const effectivenessLabels = {
+          four_times_effective: '4× Weak',
+          super_effective: '2× Weak',
+          normal_effective: 'Neutral',
+          two_times_resistant: '½ Resist',
+          four_times_resistant: '¼ Resist',
+          immune: 'Immune'
+        };
+        d.innerHTML = `
+          <button class="minimize-button" title="Move to History">−</button>
+          <button class="close-button" title="Close card">×</button>
+          <div class="card-slot-label">Active</div>
+          <img src="${localSprite}" alt="${displayName}" onerror="this.onerror=null; this.src='${fallbackSprite}'">
+          <h2>
+            <a href="${profileUrl}"
+              class="text-blue-400 underline text-xl font-semibold hover:text-blue-300 transition">
+              ${displayName}
+            </a>
+          </h2>
+          <p class="type-line">
+            Type: ${r.types.map(t => `<span class="type-badge type-${t}">${t}</span>`).join(' ')}
+          </p>
+          ${[ 'four_times_effective','super_effective','normal_effective',
+               'two_times_resistant','four_times_resistant','immune' ]
+            .map(label => {
+              const values = r.effectiveness[label] || [];
+              const badges = values
+                .map(t => `<span class="type-badge type-${t}">${t}</span>`)
+                .join('') || '<span class="type-badge type-none">None</span>';
+
+              if (label === 'normal_effective') {
+                const count = values.length;
+                const countText = count === 1 ? '1 type' : `${count} types`;
+                return `
+                  <div class="separator"></div>
+                  <details class="effectiveness-row neutral-dropdown">
+                    <summary class="neutral-summary" title="Show/hide ${countText} neutral effectiveness types">
+                      <span class="neutral-summary-control">
+                        <span class="effectiveness-label">${effectivenessLabels[label]}:</span>
+                        <span class="neutral-action" aria-hidden="true">
+                          <span class="neutral-caret">▸</span>
+                          <span class="neutral-count-collapsed">Show ${countText}</span>
+                          <span class="neutral-count-open">Hide</span>
+                        </span>
+                      </span>
+                    </summary>
+                    <div class="effectiveness-content neutral-content">${badges}</div>
+                  </details>`;
+              }
+
+              return `
+                <div class="separator"></div>
+                <div class="effectiveness-row">
+                  <span class="effectiveness-label">${effectivenessLabels[label]}:</span>
+                  <div class="effectiveness-content">${badges}</div>
+                </div>`;
+            })
+            .join('')}
+        `;
+        d.querySelector('.minimize-button').addEventListener('click', () => {
+          addToHistory(r);
+          d.remove();
+          saveState();
+        });
+        d.querySelector('.close-button').addEventListener('click', () => {
+          d.remove();
+          if (!dualMode) currentPokemon = null;
+          saveState();
+        });
+        return d;
+      }
+
+      // History
+      function addToHistory(r, note = null) {
+        const item = { ...r };
+        if (note) item.history_note = note;
+        const id = pokemonIdentity(item);
+        historyList = historyList.filter(x => pokemonIdentity(x) !== id);
+        historyList.unshift(item);
+        if (historyList.length > MAX_HISTORY) historyList.pop();
+        renderHistory();
+        saveState();
+      }
+
+      function removeFromHistory(itemOrName) {
+        const id = typeof itemOrName === 'object' ? pokemonIdentity(itemOrName) : String(itemOrName || '').toLowerCase();
+        historyList = historyList.filter(x => pokemonIdentity(x) !== id && String(x.display_name || '').toLowerCase() !== id);
+        renderHistory();
+        saveState();
+      }
+
+      function renderHistory() {
+        const h = document.getElementById('history');
+        h.innerHTML = '';
+
+        const title = document.createElement('div');
+        title.className = 'history-title';
+        title.textContent = 'History';
+        h.appendChild(title);
+
+        const itemContainer = document.createElement('div');
+        itemContainer.className = 'history-items';
+        h.appendChild(itemContainer);
+
+        historyList.forEach(r => {
+          const v = document.createElement('div');
+          v.className = 'small-card';
+          const display = pokemonDisplay(r);
+          const note = r.history_note ? `<span class="history-note">${r.history_note}</span>` : '';
+          v.innerHTML = `
+            <button class="history-item"><span>${display}</span>${note}</button>
+            <span class="delete-history-item cursor-pointer text-red-400 ml-2">×</span>
+          `;
+
+          v.querySelector('.history-item').addEventListener('click', () => {
+            const main = document.getElementById('main-result');
+            const existing = [...main.children].map(c => JSON.parse(c.dataset.pokemon));
+
+            if (!dualMode) {
+              if (existing.length === 1) {
+                const removed = existing[0];
+                main.removeChild(main.children[0]);
+                addToHistory(removed);
+              }
+              main.innerHTML = '';
+              main.appendChild(createCard(r));
+            } else {
+              if (existing.length >= 2) {
+                const removed = existing[0];
+                main.removeChild(main.children[0]);
+                addToHistory(removed);
+              }
+              const exists = existing.some(x => pokemonIdentity(x) === pokemonIdentity(r));
+              if (!exists) main.appendChild(createCard(r));
+            }
+
+            removeFromHistory(r);
+            currentPokemon = r;
+            refreshCardSlots();
+            saveState();
+          });
+
+          v.querySelector('.delete-history-item').addEventListener('click', (e) => {
+            e.stopPropagation();
+            removeFromHistory(r);
+          });
+
+          itemContainer.appendChild(v);
+        });
+      }
+
+      // Helpers
+      function showError(msg) {
+        const container = document.getElementById('error-message');
+        const errorBox = document.createElement('div');
+        errorBox.className = 'bg-red-600 text-white p-3 rounded relative max-w-md mx-auto shadow-lg';
+        errorBox.innerHTML = `
+          <span class="absolute top-1 right-2 text-white text-lg font-bold cursor-pointer" onclick="this.parentElement.remove()">×</span>
+          <span>${msg}</span>
+        `;
+        container.innerHTML = '';
+        container.appendChild(errorBox);
+
+        setTimeout(() => {
+          if (container.contains(errorBox)) container.removeChild(errorBox);
+        }, 5000);
+      }
+      function showProgress(on) {
+        document.getElementById('progress-bar-container').style.display =
+          on ? 'block' : 'none';
+      }
+
+      // Persistence & mode toggle
+      function saveState() {
+        // Save current and secondary
+        const main = document.getElementById('main-result');
+        if (main.children.length > 0) {
+          const cur = JSON.parse(main.children[0].dataset.pokemon);
+          localStorage.setItem('pkmnCurrent', JSON.stringify(cur));
+        } else {
+          localStorage.removeItem('pkmnCurrent');
+        }
+        if (dualMode && main.children.length > 1) {
+          const sec = JSON.parse(main.children[1].dataset.pokemon);
+          localStorage.setItem('pkmnSecondary', JSON.stringify(sec));
+        } else {
+          localStorage.removeItem('pkmnSecondary');
+        }
+        localStorage.setItem('pkmnHistory', JSON.stringify(historyList));
+        localStorage.setItem('pkmnDualMode', JSON.stringify(dualMode));
+      }
+
+      function restoreState() {
+        dualMode = JSON.parse(localStorage.getItem('pkmnDualMode') || 'false');
+        toggleBtn.textContent = dualMode ? '1v1' : '2v2';
+        // Load saved cards
+        document.body.classList.toggle('dual-mode', dualMode);
+        updateModeHelper();
+        const main = document.getElementById('main-result');
+        main.innerHTML = '';
+        const curRaw = localStorage.getItem('pkmnCurrent');
+        if (curRaw) {
+          const cur = JSON.parse(curRaw);
+          main.appendChild(createCard(cur));
+        }
+        if (dualMode) {
+          const secRaw = localStorage.getItem('pkmnSecondary');
+          if (secRaw) {
+            const sec = JSON.parse(secRaw);
+            main.appendChild(createCard(sec));
+          }
+        }
+        refreshCardSlots();
+        renderHistory();
+        if (window.matchMedia('(max-width: 900px), (hover: none) and (pointer: coarse)').matches) {
+          const h = document.getElementById('history');
+          h.classList.add('hidden-history');
+          h.classList.remove('mobile-history-open');
+        }
+      }
+      
+      function clearAll() {
+        historyList = [];
+        currentPokemon = null;
+        document.getElementById('main-result').innerHTML = '';
+        renderHistory();
+        saveState();
+      }
+
+      // Expose legacy handlers (if any inline remain)
+      window.performSearch = performSearch;
+      window.clearHistory = clearAll;
+      window.toggleMode = toggleMode;
+    });
+  </script>
+</body>
+</html>

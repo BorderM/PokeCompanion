@@ -1,0 +1,484 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="/static/app_mobile.css">
+        <style>
+        /* Fixed header shared styling */
+        .fixed-header {
+            position: fixed;
+            top: 0;
+            width: 100%;
+            background-color: #111827;
+            padding: 1rem 0;
+            z-index: 1000;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            height: 200px;
+        }
+
+        .fixed-header h1 {
+            margin-top: 20px;
+        }
+
+        .watermark-fixed {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            font-size: 0.75rem;
+            color: #a0aec0;
+        }
+
+        html, body {
+            min-height: 100%;
+            background-color: #111827 !important;
+        }
+
+        body {
+            padding-top: 200px; /* Ensure all content scrolls below header */
+            justify-content: flex-start !important;
+            background-color: #111827 !important;
+        }
+
+        #results {
+            display: flex;
+            justify-content: center;
+            align-items: flex-start;
+            padding: 0 1rem 3rem; /* Sits closer to the fixed header */
+            margin-top: 0;
+            width: 100%;
+            min-height: calc(100vh - 200px);
+            background-color: #111827;
+        }
+
+        .input-container {
+            position: relative;
+            width: 100%;
+            max-width: 450px;
+            margin-bottom: 10px;
+            display: flex;
+            align-items: center;
+            padding-left: 10px;
+            gap: 20px;
+        }
+
+        .dropdown {
+            background-color: white;
+            border: 1px solid #ccc;
+            padding: 8px;
+            border-radius: 4px;
+            color: black;
+            width: 100%;
+            max-width: 200px;
+            margin-bottom: 10px;
+        }
+
+        .control-buttons {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            margin-bottom: 10px;
+            justify-content: center;
+        }
+
+        .result-card {
+            background-color: #2d2d2d;
+            color: white;
+            width: 100%;
+            max-width: 500px;
+            display: flex;
+            flex-direction: column;
+            margin-bottom: 1rem;
+            padding: 1rem;
+            border-radius: 0.5rem;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            word-wrap: break-word;
+            justify-content: space-between;
+            position: relative;
+            margin-top: 0;
+            scroll-margin-top: 200px; /* Aligns scrolling just below header */
+        }
+
+        .result-card h2 {
+            font-size: 1.25rem;
+            font-weight: bold;
+            text-align: center;
+            margin-bottom: 1rem;
+        }
+
+        .result-card p {
+            font-size: 1rem;
+            margin-bottom: 0.5rem;
+        }
+
+        .effectiveness-row {
+            padding: 0.5rem 0;
+            display: flex;
+            align-items: flex-start;
+            flex-wrap: wrap;
+        }
+
+        .effectiveness-label {
+            width: 100px;
+            font-weight: bold;
+        }
+
+        .effectiveness-content {
+            flex: 1;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.5rem;
+        }
+
+        .separator {
+            border-top: 2px solid #444;
+            margin: 0.5rem 0;
+        }
+
+        .type-badge {
+            display: inline-block;
+            padding: 0.25rem 0.5rem;
+            border-radius: 0.5rem;
+            color: white;
+            font-weight: bold;
+            margin: 0.1rem;
+        }
+
+        /* Type colors */
+        .type-normal { background-color: #A8A77A; }
+        .type-fire { background-color: #EE8130; }
+        .type-water { background-color: #6390F0; }
+        .type-electric { background-color: #F7D02C; }
+        .type-grass { background-color: #7AC74C; }
+        .type-ice { background-color: #96D9D6; }
+        .type-fighting { background-color: #C22E28; }
+        .type-poison { background-color: #A33EA1; }
+        .type-ground { background-color: #E2BF65; }
+        .type-flying { background-color: #A98FF3; }
+        .type-psychic { background-color: #F95587; }
+        .type-bug { background-color: #A6B91A; }
+        .type-rock { background-color: #B6A136; }
+        .type-ghost { background-color: #735797; }
+        .type-dragon { background-color: #6F35FC; }
+        .type-dark { background-color: #705746; }
+        .type-steel { background-color: #C0C0C0; }
+        .type-fairy { background-color: #D685AD; }
+        .type-none { background-color: #000000; }
+
+        .hidden {
+            visibility: hidden;
+        }
+
+        @media (max-width: 768px) {
+            .result-card {
+                scroll-snap-align: start;
+                flex-shrink: 0;
+            }
+
+            #main-result {
+                scroll-snap-type: x mandatory;
+            }
+
+            .fixed-header {
+                height: 220px;
+            }
+
+            .control-buttons {
+                flex-wrap: wrap;
+                justify-content: center;
+            }
+        }
+    </style>
+    <title>Type Calculator</title>
+</head>
+<body class="bg-gray-900 text-white flex flex-col items-center justify-center min-h-screen w-full">
+    <div class="fixed-header">
+        <div class="watermark-fixed">Created by BorderM</div>
+        <h1 class="text-3xl font-bold text-center mb-2">Pokémon Type Calculator</h1>
+        <div class="control-buttons flex flex-wrap justify-center gap-2">
+            <button onclick="clearResults()" class="bg-gray-500 text-white p-2 rounded-lg">Clear</button>
+      <a href="/pokedex" class="bg-purple-500 text-white p-2 rounded-lg">Pokédex</a>
+            <a href="/typeeffectiveness" class="bg-green-500 text-white p-2 rounded-lg">Type Effectiveness</a>
+            <a href="/stats" class="bg-yellow-500 text-white p-2 rounded-lg">Stats</a>
+            <a href="/natures" class="bg-cyan-500 text-white p-2 rounded-lg">Natures</a>
+			<a href="/evolutions" class="bg-orange-500 text-white p-2 rounded-lg">Evolutions</a>
+        </div>
+        <div class="input-container">
+            <select id="type1" class="dropdown">
+                <option value="">Select Type 1</option>
+                <option value="bug">Bug</option>
+                <option value="dark">Dark</option>
+                <option value="dragon">Dragon</option>
+                <option value="electric">Electric</option>
+                <option value="fairy">Fairy</option>
+                <option value="fighting">Fighting</option>
+                <option value="fire">Fire</option>
+                <option value="flying">Flying</option>
+                <option value="ghost">Ghost</option>
+                <option value="grass">Grass</option>
+                <option value="ground">Ground</option>
+                <option value="ice">Ice</option>
+                <option value="normal">Normal</option>
+                <option value="poison">Poison</option>
+                <option value="psychic">Psychic</option>
+                <option value="rock">Rock</option>
+                <option value="steel">Steel</option>
+                <option value="water">Water</option>
+            </select>
+            <select id="type2" class="dropdown">
+                <option value="">Select Type 2</option>
+                <option value="bug">Bug</option>
+                <option value="dark">Dark</option>
+                <option value="dragon">Dragon</option>
+                <option value="electric">Electric</option>
+                <option value="fairy">Fairy</option>
+                <option value="fighting">Fighting</option>
+                <option value="fire">Fire</option>
+                <option value="flying">Flying</option>
+                <option value="ghost">Ghost</option>
+                <option value="grass">Grass</option>
+                <option value="ground">Ground</option>
+                <option value="ice">Ice</option>
+                <option value="normal">Normal</option>
+                <option value="poison">Poison</option>
+                <option value="psychic">Psychic</option>
+                <option value="rock">Rock</option>
+                <option value="steel">Steel</option>
+                <option value="water">Water</option>
+            </select>
+        </div>
+    </div>
+    <div id="results"></div>
+    <script>
+        let TYPE_CHART = {};
+
+        // 1) Fetch the local chart once, then initialize everything
+        fetch('{{ url_for("static", filename="typechart.json") }}')
+            .then(r => {
+                if (!r.ok) throw new Error("Could not load typechart.json");
+                return r.json();
+            })
+            .then(json => {
+                TYPE_CHART = json;
+                initCalculator();      // now that TYPE_CHART is ready, wire up the UI
+            })
+            .catch(err => {
+                console.error("Type chart load failed:", err);
+                document.getElementById('results').innerHTML =
+                `<div class="result-card"><p style="color: red">Could not load type chart.</p></div>`;
+            });
+
+        // 2) All of your normal functions go _below_ (populateDropdowns, clearResults, displayResults, etc.)
+
+        function initCalculator() {
+            populateDropdowns();
+            computeAndRender();      // initial render if any types were saved
+            document.getElementById('type1')
+            .addEventListener('change', computeAndRender);
+            document.getElementById('type2')
+            .addEventListener('change', computeAndRender);
+        }
+
+        const types = [
+            "bug", "dark", "dragon", "electric", "fairy", "fighting",
+            "fire", "flying", "ghost", "grass", "ground", "ice",
+            "normal", "poison", "psychic", "rock", "steel", "water"
+        ];
+
+        function populateDropdowns() {
+            const type1Dropdown = document.getElementById('type1');
+            const type2Dropdown = document.getElementById('type2');
+
+            const type1Value = localStorage.getItem('type1') || type1Dropdown.value;
+            const type2Value = localStorage.getItem('type2') || type2Dropdown.value;
+
+            type1Dropdown.innerHTML = '<option value="">Select Type 1</option>';
+            type2Dropdown.innerHTML = '<option value="">Select Type 2</option>';
+
+            types.forEach(type => {
+                const option1 = document.createElement('option');
+                option1.value = type;
+                option1.textContent = capitalizeFirstLetter(type);
+                type1Dropdown.appendChild(option1);
+
+                const option2 = document.createElement('option');
+                option2.value = type;
+                option2.textContent = capitalizeFirstLetter(type);
+                type2Dropdown.appendChild(option2);
+            });
+
+            type1Dropdown.value = type1Value;
+            type2Dropdown.value = type2Value;
+
+            disableSelectedOptions();
+        }
+
+        function disableSelectedOptions() {
+            const type1 = document.getElementById('type1').value;
+            const type2 = document.getElementById('type2').value;
+
+            document.querySelectorAll('#type1 option').forEach(option => {
+                option.disabled = false;
+            });
+
+            document.querySelectorAll('#type2 option').forEach(option => {
+                option.disabled = false;
+            });
+
+            if (type1) {
+                document.querySelector(`#type2 option[value="${type1}"]`).disabled = true;
+            }
+
+            if (type2) {
+                document.querySelector(`#type1 option[value="${type2}"]`).disabled = true;
+            }
+        }
+
+        function updateDropdowns() {
+            const type1 = document.getElementById('type1').value;
+            const type2 = document.getElementById('type2').value;
+
+            disableSelectedOptions();
+
+            localStorage.setItem('type1', type1);
+            localStorage.setItem('type2', type2);
+
+            computeAndRender();
+        }
+
+        function computeAndRender() {
+            const t1 = document.getElementById('type1').value;
+            const t2 = document.getElementById('type2').value;
+            if (!t1) {
+                document.getElementById('results').innerHTML = '';
+                return;
+            }
+
+            // since TYPE_CHART[type] is already the damage_relations object:
+            const rel1 = TYPE_CHART[t1];
+            const rel2 = t2 ? TYPE_CHART[t2] : { };
+
+            // now pass those directly into your JS port of calculate_type_effectiveness:
+            const merged = calculateTypeEffectiveness([ rel1, rel2 ]);
+            displayResults(merged);
+            }
+
+
+        // simple port of your Python logic to JS:
+        function calculateTypeEffectiveness(damageRelationsList) {
+            const damage = {};
+
+            for (const rel of damageRelationsList) {
+                // guard against undefined
+                for (const [relation, arr] of Object.entries(rel || {})) {
+                const mult = relation === 'double_damage_from' ? 2
+                            : relation === 'half_damage_from'   ? 0.5
+                            : relation === 'no_damage_from'     ? 0
+                            : 1;
+
+                for (const o of arr) {
+                    damage[o.name] = (damage[o.name] || 1) * mult;
+                }
+                }
+            }
+
+            const categories = {
+                four_times_effective: [],
+                super_effective:      [],
+                normal_effective:     [],
+                two_times_resistant:  [],
+                four_times_resistant: [],
+                immune:               []
+            };
+
+            const allTypes = new Set([
+                "normal","fire","water","electric","grass","ice","fighting",
+                "poison","ground","flying","psychic","bug","rock","ghost",
+                "dragon","dark","steel","fairy"
+            ]);
+
+            for (const [t, m] of Object.entries(damage)) {
+                if      (m === 4)   categories.four_times_effective.push(t);
+                else if (m === 2)   categories.super_effective.push(t);
+                else if (m === 0.5) categories.two_times_resistant.push(t);
+                else if (m === 0.25)categories.four_times_resistant.push(t);
+                else if (m === 0)   categories.immune.push(t);
+            }
+
+            categories.normal_effective = 
+                [...allTypes].filter(t => ![
+                ...categories.four_times_effective,
+                ...categories.super_effective,
+                ...categories.two_times_resistant,
+                ...categories.four_times_resistant,
+                ...categories.immune
+                ].includes(t));
+
+            return categories;
+        }
+
+
+        function clearResults() {
+			localStorage.removeItem('type1');
+            localStorage.removeItem('type2');
+            document.getElementById('results').innerHTML = '';
+            document.getElementById('type1').value = '';
+            document.getElementById('type2').value = '';
+            populateDropdowns();
+            
+        }
+
+        function displayResults(data) {
+            const resultsDiv = document.getElementById('results');
+            resultsDiv.innerHTML = `
+                <div class="result-card">
+                    <h2>Type Effectiveness</h2>
+                    ${createEffectivenessRow('4x Weak', data.four_times_effective)}
+                    <div class="separator"></div>
+                    ${createEffectivenessRow('2x Weak', data.super_effective)}
+                    <div class="separator"></div>
+                    ${createEffectivenessRow('Neutral', data.normal_effective)}
+                    <div class="separator"></div>
+                    ${createEffectivenessRow('½ Resist', data.two_times_resistant)}
+                    <div class="separator"></div>
+                    ${createEffectivenessRow('¼ Resist', data.four_times_resistant)}
+                    <div class="separator"></div>
+                    ${createEffectivenessRow('Immune', data.immune)}
+                </div>
+            `;
+        }
+
+        function createEffectivenessRow(label, types) {
+            const formattedTypes = types.length > 0 ? 
+                types.map(type => `<span class="type-badge type-${type.toLowerCase()}">${capitalizeFirstLetter(type)}</span>`).join(' ') :
+                `<span class="type-badge type-none">None</span>`;
+            
+            return `
+                <div class="effectiveness-row">
+                    <span class="effectiveness-label">${label}:</span>
+                    <div class="effectiveness-content">${formattedTypes}</div>
+                </div>
+            `;
+        }
+
+        function capitalizeFirstLetter(string) {
+            return string.charAt(0).toUpperCase() + string.slice(1);
+        }
+
+        function navigateToPage(page) {
+            window.location.href = page;
+        }
+
+        document.getElementById('type1').addEventListener('change', updateDropdowns);
+        document.getElementById('type2').addEventListener('change', updateDropdowns);
+
+        window.onload = () => {
+            populateDropdowns();
+            computeAndRender();
+        };
+    </script>
+</body>
+</html>

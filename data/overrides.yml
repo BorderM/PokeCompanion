@@ -1,0 +1,314 @@
+sandshrew-alola:
+  - to: sandslash-alola
+    trigger: use-item
+    item: ice-stone
+
+rattata-alola:
+  - to: raticate-alola
+    trigger: level-up
+    min_level: 20
+    time_of_day: night
+
+vulpix-alola:
+  - to: ninetales-alola
+    trigger: use-item
+    item: ice-stone
+
+meowth-alola:
+  - to: persian-alola
+    trigger: level-up
+    min_happiness: 160
+
+meowth-galar:
+  - to: perrserker
+    trigger: level-up
+    min_level: 28
+
+slowpoke-galar:
+  - to: slowbro-galar
+    trigger: use-item
+    item: galarica-cuff
+  - to: slowking-galar
+    trigger: use-item
+    item: galarica-wreath
+
+farfetchd-galar:
+  - to: sirfetchd
+    trigger: three-critical-hits
+    note: "This is to be done without losing or running from the battle."
+
+voltorb-hisui:
+  - to: electrode-hisuian
+    trigger: use-item
+    item: leaf-stone
+
+wooper-paldea:
+  - to: clodsire
+    trigger: level-up
+    min_level: 20
+  
+qwilfish-hisui: 
+  - to: overqwil
+    trigger: level-up
+    known_move: barb-barrage
+
+sneasel-hisui:
+  - to: sneasler
+    trigger: level-up
+    held_item: razor-claw
+    time_of_day: day
+    
+corsola-galar:
+  - to: cursola
+    trigger: level-up
+    min_level: 38
+
+darumaka-galar:
+  - to: darmanitan-galar
+    trigger: use-item
+    item: ice-stone
+
+yamask-galar:
+  - to: runerigus
+    trigger: take-damage
+    note: "Must travel under the large rock in Dusty Bowl with Yamask at 49+ HP taken without fainting."
+
+dartrix:
+  - to: decidueye-hisui
+    trigger: level-up
+    min_level: 36
+    note: "Only evolves into Hisuian Decidueye in the Hisui region."
+
+pikachu:
+  - to: raichu-alola
+    trigger: use-item
+    item: thunder-stone
+    note: "Only evolves into Alolan Raichu in the Alola region."
+
+exeggcute:
+  - to: exeggutor-alola
+    trigger: use-item
+    item: leaf-stone
+    note: "Only evolves into Alolan Exeggutor in the Alola region."
+
+cubone:
+  - to: marowak-alola
+    trigger: level-up
+    min_level: 28
+    time_of_day: night
+    note: "Only evolves into Alolan Marowak in the Alola region."
+
+koffing:
+  - to: weezing-galar
+    trigger: level-up
+    min_level: 35
+    note: "Only evolves into Galarian Weezing in the Galar region."
+
+mime-jr:
+  - to: mr-mime
+    trigger: level-up
+    known_move: mimic
+  - to: mr-mime-galar
+    trigger: level-up
+    known_move: mimic
+    note: "Only evolves into Galarian Mr. Mime in the Galar region."
+
+mr-mime-galar:
+  - to: mr-rime
+    trigger: level-up
+    min_level: 42
+
+petilil:
+  - to: lilligant-hisui
+    trigger: use-item
+    item: sun-stone
+    note: "Only evolves into Hisuian Lilligant in the Hisui region."
+
+rufflet:
+  - to: braviary-hisui
+    trigger: level-up
+    min_level: 54
+    note: "Only evolves into Hisuian Braviary in the Hisui region."
+
+goomy:
+  - to: sliggoo-hisui
+    trigger: level-up
+    min_level: 40
+    note: "Only evolves into Hisuian Sliggoo in the Hisui region."
+
+sliggoo-hisui:
+  - to: goodra-hisui
+    trigger: level-up
+    min_level: 50
+    note: "Must be raining"
+
+diglett-alola:
+  - to: dugtrio-alola
+    trigger: level-up
+    min_level: 26
+
+growlithe-hisui:
+  - to: arcanine-hisui
+    trigger: use-item
+    item: fire-stone
+
+geodude-alola:
+  - to: graveler-alola
+    trigger: level-up
+    min_level: 25
+
+graveler-alola:
+  - to: golem-alola
+    trigger: trade
+    note: "Some versions have link items to fake a trade to evolve"
+
+ponyta-galar:
+  - to: rapidash-galar
+    trigger: level-up
+    min_level: 40
+
+grimer-alola:
+  - to: muk-alola
+    trigger: level-up
+    min_level: 38
+
+quilava:
+  - to: typhlosion-hisui
+    trigger: level-up
+    min_level: 36
+    note: "Only evolves into Hisuian Typhlosion in the Hisui region."
+
+zorua-hisui:
+  - to: zoroark-hisui
+    trigger: level-up
+    min_level: 30
+
+bergmite:
+  - to: avalugg-hisui
+    trigger: level-up
+    min_level: 37
+
+zigzagoon-galar:
+  - to: linoone-galar
+    trigger: level-up
+    min_level: 20
+
+linoone-galar: 
+  - to: obstagoon
+    trigger: level-up
+    min_level: 35
+    time_of_day: night
+
+dewott:
+  - to: samurott-hisui
+    trigger: level-up
+    min_level: 36
+    note: "Only evolves into Hisuian Samurott in the Hisui region."
+
+basculin-white-striped:
+  - to: basculegion-male
+    trigger: level-up
+    note: "Basculin White Striped evolves after losing at least 294 HP from recoil damage without fainting"
+
+nincada: 
+  - to: shedinja
+    trigger: level-up
+    min_level: 20
+    note: "Upon evolving Nincada to Ninjask, if there is at least one space in your party and a pokeball in your bag."
+
+espurr:
+  - to: Meowstic
+    trigger: level-up
+    min_level: 25
+
+rockruff:  
+  - to: lycanroc-midday  
+    trigger: level-up-during-day
+    min_level: 25 
+    time_of_day: day  
+    note: "Ability must be Keen Eye, Vital Spirit, or Steadfast"  
+  - to: lycanroc-midnight  
+    trigger: level-up-during-night  
+    min_level: 25 
+    time_of_day: night  
+    note: "Ability must be Keen Eye, Vital Spirit, or Steadfast"  
+  - to: lycanroc-dusk  
+    trigger: level-up-during-evening   
+    min_level: 25 
+    time_of_day: evening  
+    note: "Ability must be Own Tempo"  
+
+poltchageist: 
+  - to: sinistcha
+    trigger: use-item
+    item: unremarkable teacup OR masterpiece teacup
+    note: "Unremarkable teacup is for Unremarkable form. Masterpiece teacup is for Masterpiece form. They are form dependant of poltchageist"
+
+toxel:
+  - to: toxtricity-amped
+    trigger: level-up
+    min_level: 30
+    note: "Nature must be one of Hardy, Brave, Adamant, Naughty, Docile, Impish, Lax, Hasty, Jolly, Naive, Rash, Sassy, or Quirky."
+
+  - to: toxtricity-low-key
+    trigger: level-up
+    min_level: 30
+    note: "Nature must be one of Lonely, Bold, Relaxed, Timid, Serious, Modest, Mild, Quiet, Bashful, Calm, Gentle, or Careful."
+
+doublade:
+  - to: aegislash
+    trigger: use-item
+    min_level: 35
+    item: dusk-stone
+
+pumpkaboo:
+  - to: gourgeist
+    trigger: trade
+
+burmy: 
+  - to: wormadam-plant
+    trigger: level-up
+    min_level: 20
+    gender: female
+    note: "battles in areas like forest and most routes change burmy's cloak to plant. This affects the cloak of Wormadam when evolving."
+  - to: wormadam-sandy
+    trigger: level-up
+    min_level: 20
+    gender: female
+    note: "battles in caves, beaches or deserts change burmy's cloak to sandy. This affects the cloak of Wormadam when evolving"
+  - to: wormadam-trash
+    trigger: level-up
+    min_level: 20
+    gender: female
+    note: "battles in most buildings and gyms change burmy's cloak to trash. This affects the cloak of Wormadam when evolving."
+
+  - to: mothim
+    trigger: level-up
+    min_level: 20
+    gender: male
+
+kubfu: 
+  - to: urshifu-single-strike
+    trigger: use-item
+    item: scroll-of-darkness
+  - to: urshifu-rapid-strike
+    trigger: use-item
+    item: scroll-of-waters
+
+eevee:
+  - to: glaceon
+    trigger: level-up or use-item
+    methods:
+      - method: level-up
+        location: near ice rock
+      - method: use-item
+        item: ice-stone
+    note: "Evolves into Glaceon by leveling up near an Ice Rock or using an Ice Stone."
+  - to: leafeon
+    trigger: level-up or use-item
+    methods:
+      - method: level-up
+        location: near moss rock
+      - method: use-item
+        item: leaf-stone
+    note: "Evolves into Leafeon by leveling up near a Moss Rock or using a Leaf Stone."
