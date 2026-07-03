@@ -4,7 +4,7 @@ import json
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional
 
 try:
     from rapidfuzz import fuzz, process
@@ -166,6 +166,25 @@ class PokemonRepository:
             normalized_text=normalized,
         )
 
+    def _trim_after_battle_gender_marker(self, raw_text: str) -> str:
+        """Drop level/HP noise that appears after a visible gender marker."""
+        raw_text = raw_text or ""
+        if not raw_text:
+            return raw_text
+        upper = raw_text.upper()
+        # Nidoran's species name itself contains a gender marker; do not turn
+        # Nidoran♂/Nidoran♀ into the ambiguous base text "Nidoran".
+        if re.search(r"NIDORAN\s*[♀♂]", upper):
+            return raw_text
+        positions = [pos for marker in ("♀", "♂") if (pos := raw_text.find(marker)) >= 0]
+        if not positions:
+            return raw_text
+        split_at = min(positions)
+        left = raw_text[:split_at]
+        if len(re.sub(r"[^A-Za-z]", "", left)) < 2:
+            return raw_text
+        return left.strip()
+
     def _clean_ocr_nameplate_text(self, raw_text: str) -> str:
         """Remove common battle UI noise before matching OCR output.
 
@@ -173,7 +192,9 @@ class PokemonRepository:
         ``Heatmor Lv58 HP``. Since we only need the Pokémon name, stripping
         level/HP fragments makes exact and fuzzy matching much more reliable.
         """
-        text = normalize_name(raw_text)
+        text = normalize_name(self._trim_after_battle_gender_marker(raw_text))
+        if not re.match(r"^NIDORAN\s+[MF]\b", text):
+            text = re.sub(r"\b[MF]\s+L[VWUYI]?\s*[A-Z0-9]{0,4}\b.*$", " ", text)
         text = re.sub(r"\bL[VW]\s*\d{1,3}\b", " ", text)
         text = re.sub(r"\bLEVEL\s*\d{1,3}\b", " ", text)
         text = re.sub(r"\bHP\b", " ", text)
@@ -182,16 +203,50 @@ class PokemonRepository:
         text = re.sub(r"\s+", " ", text).strip()
         return text
 
+    def _ocr_candidate_variants(self, normalized: str, cleaned: str) -> List[str]:
+        """Return conservative OCR variants for pixel-font nameplate reads."""
+        variants: List[str] = []
+
+        def add(value: str) -> None:
+            value = re.sub(r"\s+", " ", value or "").strip()
+            if value and value not in variants:
+                variants.append(value)
+
+        for value in (normalized, cleaned):
+            add(value)
+            # Fan-game level markers often OCR as "Lyd", "Luad", "Lusi", etc.
+            # Split only when there is whitespace before the level-ish token.
+            for pattern in (
+                r"\s+L[VWUYI][A-Z0-9]{0,4}\b.*$",
+                r"\s+L\s*[VWUYI]?\s*[A-Z0-9]{1,4}\b.*$",
+                r"\s+LEVEL\s*[A-Z0-9]{0,4}\b.*$",
+            ):
+                add(re.sub(pattern, "", value, flags=re.IGNORECASE))
+            words = [w for w in re.split(r"\s+", value) if w]
+            for n in (1, 2, 3):
+                if len(words) >= n:
+                    add(" ".join(words[:n]))
+
+        # Very small, exact/substring-oriented substitutions seen in chunky
+        # pixel fonts. These are not used to match tiny fragments because the
+        # short-noise guard below still runs before fuzzy matching.
+        for value in list(variants):
+            compact = re.sub(r"[^A-Z]", "", value)
+            if len(compact) < 4:
+                continue
+            if compact.startswith(("UNIX", "UNIK")):
+                add("O" + compact[1:])
+            if compact.startswith("LRO"):
+                add("CRO" + compact[3:])
+        return variants
+
     def match_name(self, raw_text: str, min_score: float = 84) -> Optional[MatchResult]:
         normalized = normalize_name(raw_text)
         if len(normalized) < 2:
             return None
 
-        candidates_to_try = []
         cleaned = self._clean_ocr_nameplate_text(raw_text)
-        for value in (normalized, cleaned):
-            if value and value not in candidates_to_try:
-                candidates_to_try.append(value)
+        candidates_to_try = self._ocr_candidate_variants(normalized, cleaned)
 
         # Fast path: exact normalized candidate. This fixes cases where OCR has
         # correctly read a name like "Heatmor" but the fuzzy path is unavailable
@@ -201,12 +256,23 @@ class PokemonRepository:
                 return self._make_match(value, 100.0, raw_text, normalized)
 
         # Do not fuzzy-match tiny fragments. When there is no Pokémon name on
-        # screen, OCR often returns scraps like "1", "WW", or "I WW". Those can
-        # accidentally score well against short names/forms and force a false
-        # battle card. Exact short names above are still accepted.
+        # screen, OCR often returns scraps like "1", "WW", "I WW", or short
+        # partials like "Onit". Those can accidentally score well against
+        # longer names. Exact short names above are still accepted.
         cleaned_letters = re.sub(r"[^A-Z]", "", cleaned or normalized)
-        if len(cleaned_letters) < 4:
+        if len(cleaned_letters) <= 4:
             return None
+
+        # Reads like "Uni Lyd" are usually a short partial name plus a badly
+        # read level marker. Fuzzy matching those can jump to unrelated longer
+        # Pokémon such as Reuniclus. Exact short names and exact substitutions
+        # have already returned above, so do not fuzzy-match this shape.
+        words = [w for w in re.split(r"\s+", cleaned or normalized) if w]
+        if len(words) >= 2:
+            first_letters = re.sub(r"[^A-Z]", "", words[0])
+            levelish_rest = any(re.fullmatch(r"L[VWUYI]?[A-Z0-9]{0,4}", word) for word in words[1:])
+            if len(first_letters) < 4 and levelish_rest:
+                return None
 
         # Substring path: useful when a user selects the whole nameplate and OCR
         # includes level/HP text along with the name. Prefer the longest matching
@@ -214,7 +280,20 @@ class PokemonRepository:
         for value in candidates_to_try:
             if len(value) >= 4:
                 for candidate in sorted(self.candidates, key=len, reverse=True):
-                    if len(candidate) >= 4 and (candidate in value or value in candidate):
+                    if len(candidate) < 4:
+                        continue
+                    candidate_compact = re.sub(r"[^A-Z]", "", candidate)
+                    value_compact = re.sub(r"[^A-Z]", "", value)
+                    contains_full_candidate = candidate in value or (
+                        len(candidate_compact) >= 4 and candidate_compact in value_compact
+                    )
+                    is_strong_partial = (
+                        len(value_compact) >= 5
+                        and len(candidate_compact) >= 5
+                        and value_compact in candidate_compact
+                        and (len(value_compact) / max(1, len(candidate_compact))) >= 0.72
+                    )
+                    if contains_full_candidate or is_strong_partial:
                         match = self._make_match(candidate, 98.0, raw_text, normalized)
                         if match and match.score >= min_score:
                             return match

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ctypes
 import ctypes.wintypes
+import difflib
 import json
 import queue
 import re
@@ -131,9 +132,12 @@ AUTO_AREA_TEXT_PANEL_SCORE = 90
 # only after the crop has passed the nameplate detector. This rescues common
 # pixel-font reads like Heatmor -> Heatnors or Chansey -> Chanseus without
 # lowering the general/no-panel threshold used outside battles.
-AUTO_AREA_PANEL_RELAXED_SCORE = 78
+AUTO_AREA_PANEL_RELAXED_SCORE = 76
 AUTO_AREA_SECOND_SLOT_CONFIRM_SCANS = 2
 LOW_CONFIDENCE_CLEAR_SCANS = 2
+MAX_NAME_REGIONS = 3
+AUTO_TOP_LEFT_SCAN_WIDTH_RATIO = 0.66
+AUTO_TOP_LEFT_SCAN_HEIGHT_RATIO = 0.54
 CONTROL_PANEL_WIDTH = 260
 CONTROL_STATUS_WRAP = CONTROL_PANEL_WIDTH - 34
 DOCK_WIDTH = 500
@@ -456,13 +460,13 @@ class BattleMonitorApp:
         self.add_tooltip(self.window_region_button, "Choose a running emulator/game window and use its current bounds.")
         self.add_name_button = ttk.Button(capture, text="Add Name", command=self.add_name_region)
         self.add_name_button.grid(row=1, column=0, sticky="ew", padx=(0, 2), pady=2)
-        self.add_tooltip(self.add_name_button, "Add a precise OCR crop around one enemy Pokemon name box.")
+        self.add_tooltip(self.add_name_button, "Optional: add a tight OCR crop around one enemy name if auto detection struggles.")
         self.clear_names_button = ttk.Button(capture, text="Clear Names", command=self.clear_name_regions)
         self.clear_names_button.grid(row=1, column=1, sticky="ew", padx=(2, 0), pady=2)
         self.add_tooltip(self.clear_names_button, "Remove all precise name crops and reset current detections.")
         self.name_area_button = ttk.Button(capture, text="Name Area", command=self.select_name_scan_area)
         self.name_area_button.grid(row=2, column=0, sticky="ew", padx=(0, 2), pady=2)
-        self.add_tooltip(self.name_area_button, "Select one broad area containing possible enemy nameplates; the app detects panels inside it.")
+        self.add_tooltip(self.name_area_button, "Optional: select a broad nameplate area if the automatic top-left scan needs guidance.")
         self.preview_toggle_button = ttk.Button(capture, textvariable=self.preview_button_text, command=self.toggle_preview)
         self.preview_toggle_button.grid(row=2, column=1, sticky="ew", padx=(2, 0), pady=2)
         self.add_tooltip(self.preview_toggle_button, "Show or hide a preview of the selected game region and OCR boxes.")
@@ -477,7 +481,7 @@ class BattleMonitorApp:
         tracking.columnconfigure(1, weight=1)
         self.start_button = ttk.Button(tracking, text="Start", command=self.start_tracking)
         self.start_button.grid(row=0, column=0, sticky="ew", padx=(0, 2), pady=2)
-        self.add_tooltip(self.start_button, "Begin OCR scanning using the selected name regions or Name Area.")
+        self.add_tooltip(self.start_button, "Begin OCR scanning. With no name crops, the app scans the top-left battle area automatically.")
         self.stop_button = ttk.Button(tracking, text="Stop", command=self.stop_tracking)
         self.stop_button.grid(row=0, column=1, sticky="ew", padx=(2, 0), pady=2)
         self.add_tooltip(self.stop_button, "Stop scanning and ignore any late OCR results from in-flight scans.")
@@ -1031,7 +1035,7 @@ class BattleMonitorApp:
         self.slot_miss_counts.clear()
         self.auto_slot_pending.clear()
         self.last_rendered_keys = tuple()
-        self.status_var.set(f"Game region set: {rect.w}×{rect.h} at {rect.x},{rect.y}. Add one or more name regions.")
+        self.status_var.set(f"Game region set: {rect.w}×{rect.h} at {rect.x},{rect.y}. Auto nameplate scan is ready.")
         self.update_preview()
         self.render_detected(self.last_debug_lines, force=True)
 
@@ -1066,16 +1070,25 @@ class BattleMonitorApp:
         self.auto_slot_pending.clear()
         self.last_rendered_keys = tuple()
         derived = self.derive_regions_from_name_area()
-        self.status_var.set(
-            f"Name Area set: {rel.w}×{rel.h} at +{rel.x},+{rel.y}. "
-            f"It will scan as {len(derived)} slot(s). Add Name regions later if you want tighter crops."
-        )
+        if self.name_regions:
+            self.status_var.set(
+                f"Name Area set: {rel.w}×{rel.h} at +{rel.x},+{rel.y}. "
+                f"It will confirm visibility for {len(self.name_regions)} precise name zone(s)."
+            )
+        else:
+            self.status_var.set(
+                f"Name Area set: {rel.w}×{rel.h} at +{rel.x},+{rel.y}. "
+                f"It will scan as {len(derived)} slot(s). Add Name regions later if you want tighter crops."
+            )
         self.update_preview()
         self.render_detected(self.last_debug_lines, force=True)
 
     def add_name_region(self) -> None:
         if not self.game_region:
             messagebox.showinfo("Select game region first", "Select the full game region before adding name regions.")
+            return
+        if len(self.name_regions) >= MAX_NAME_REGIONS:
+            messagebox.showinfo("Name region limit", f"Up to {MAX_NAME_REGIONS} precise name regions can be added. Use Clear Names to reset them.")
             return
         self.root.withdraw()
         rect = select_screen_region(self.root, "Select a Pokémon name box region")
@@ -1092,11 +1105,17 @@ class BattleMonitorApp:
             max(1, min(rel.h, self.game_region.h - rel.y)),
         )
         # If only the auto top-left region exists, replace it with the user's precise region.
-        auto = Rect(0, 0, self.game_region.w // 2, self.game_region.h // 2)
+        auto = self.automatic_name_scan_area()
         if len(self.name_regions) == 1 and self.name_regions[0] == auto:
             self.name_regions = []
         self.name_regions.append(rel)
-        self.status_var.set(f"Added name region {len(self.name_regions)}: {rel.w}×{rel.h} at +{rel.x},+{rel.y}.")
+        if self.name_scan_area:
+            self.status_var.set(
+                f"Added name region {len(self.name_regions)}/{MAX_NAME_REGIONS}: {rel.w}×{rel.h} at +{rel.x},+{rel.y}. "
+                "Name Area will confirm whether that slot is visible."
+            )
+        else:
+            self.status_var.set(f"Added name region {len(self.name_regions)}/{MAX_NAME_REGIONS}: {rel.w}×{rel.h} at +{rel.x},+{rel.y}.")
         self.current_keys.clear()
         self.slot_form_overrides.clear()
         self.scan_histories.clear()
@@ -1114,7 +1133,7 @@ class BattleMonitorApp:
         self.slot_miss_counts.clear()
         self.auto_slot_pending.clear()
         self.last_rendered_keys = tuple()
-        self.status_var.set("Name regions cleared. Add one or more name regions before tracking.")
+        self.status_var.set("Name regions cleared. Auto top-left nameplate scan will be used.")
         self.update_preview()
         self.render_detected(self.last_debug_lines, force=True)
 
@@ -1123,9 +1142,38 @@ class BattleMonitorApp:
         shot = self.sct.grab(monitor)
         return Image.frombytes("RGB", shot.size, shot.rgb)
 
+    def capture_rect_with_grabber(self, grabber, rect: Rect) -> Image.Image:
+        monitor = {"left": rect.x, "top": rect.y, "width": rect.w, "height": rect.h}
+        shot = grabber.grab(monitor)
+        return Image.frombytes("RGB", shot.size, shot.rgb)
+
     def absolute_name_rect(self, rel: Rect) -> Rect:
         assert self.game_region is not None
         return Rect(self.game_region.x + rel.x, self.game_region.y + rel.y, rel.w, rel.h)
+
+    def automatic_name_scan_area(self) -> Optional[Rect]:
+        """Default broad scan area for enemy nameplates.
+
+        Most supported battle layouts place opponent nameplates in the top-left
+        portion of the game viewport. This gives new users a no-crop path while
+        still keeping OCR away from the command/menu area.
+        """
+        if not self.game_region:
+            return None
+        w = max(120, int(self.game_region.w * AUTO_TOP_LEFT_SCAN_WIDTH_RATIO))
+        h = max(100, int(self.game_region.h * AUTO_TOP_LEFT_SCAN_HEIGHT_RATIO))
+        return Rect(0, 0, min(self.game_region.w, w), min(self.game_region.h, h))
+
+    def rects_overlap(self, left: Rect, right: Rect, margin: int = 4) -> bool:
+        left_x1 = left.x - margin
+        left_y1 = left.y - margin
+        left_x2 = left.x + left.w + margin
+        left_y2 = left.y + left.h + margin
+        right_x1 = right.x
+        right_y1 = right.y
+        right_x2 = right.x + right.w
+        right_y2 = right.y + right.h
+        return left_x1 < right_x2 and left_x2 > right_x1 and left_y1 < right_y2 and left_y2 > right_y1
 
     def derive_regions_from_name_area(self) -> List[Rect]:
         """Return the broad Name Area as the auto-detection source.
@@ -1137,16 +1185,17 @@ class BattleMonitorApp:
         actual purple battle nameplates inside it. If it finds two panels, it
         scans two slots; if it finds one panel, it scans one slot.
         """
-        if not self.name_scan_area:
+        area = self.name_scan_area or self.automatic_name_scan_area()
+        if not area:
             return []
-        area = self.name_scan_area
         return [Rect(area.x, area.y, area.w, area.h)]
 
     def effective_name_regions(self) -> List[Rect]:
         """Name regions currently used for OCR.
 
         v24: Name Area now counts as a tracking source when no precise Add Name
-        regions are present.
+        regions are present. When neither is configured, use the automatic
+        top-left battle area so first-time setup can start from Window Region.
         """
         if self.name_regions:
             return [Rect(r.x, r.y, r.w, r.h) for r in self.name_regions]
@@ -1171,12 +1220,24 @@ class BattleMonitorApp:
             rel = self.name_scan_area
             draw.rectangle([rel.x, rel.y, rel.x + rel.w, rel.y + rel.h], outline="cyan", width=2)
             draw.text((rel.x + 4, rel.y + 4), "Name Area", fill="cyan")
+        elif not self.name_regions:
+            rel = self.automatic_name_scan_area()
+            if rel:
+                draw.rectangle([rel.x, rel.y, rel.x + rel.w, rel.y + rel.h], outline="cyan", width=2)
+                draw.text((rel.x + 4, rel.y + 4), "Auto Nameplates", fill="cyan")
         for i, rel in enumerate(self.name_regions, start=1):
             draw.rectangle([rel.x, rel.y, rel.x + rel.w, rel.y + rel.h], outline="red", width=3)
             draw.text((rel.x + 4, rel.y + 4), f"Name {i}", fill="red")
-        if not self.name_regions and self.name_scan_area:
+        if self.name_regions and self.name_scan_area:
+            rel = self.name_scan_area
+            draw.text((rel.x + 4, rel.y + max(16, rel.h - 18)), "Confirms precise zones", fill="orange")
+        elif not self.name_regions and self.name_scan_area:
             rel = self.name_scan_area
             draw.text((rel.x + 4, rel.y + max(16, rel.h - 18)), "Auto detects panels here", fill="orange")
+        elif not self.name_regions:
+            rel = self.automatic_name_scan_area()
+            if rel:
+                draw.text((rel.x + 4, rel.y + max(16, rel.h - 18)), "Top-left auto scan", fill="orange")
         max_w, max_h = 720, 120
         scale = min(max_w / img.width, max_h / img.height, 1)
         if scale < 1:
@@ -1192,7 +1253,7 @@ class BattleMonitorApp:
             messagebox.showinfo("Missing region", "Select a game region first.")
             return
         if not self.effective_name_regions():
-            messagebox.showinfo("Missing name regions", "Add at least one name region or select a Name Area.")
+            messagebox.showinfo("Missing region", "Select a game/window region first.")
             return
         if not self.ocr.available:
             messagebox.showerror("OCR setup needed", self.ocr.diagnostic_message())
@@ -1525,10 +1586,11 @@ class BattleMonitorApp:
         if not name_regions:
             self.running = False
             self.scan_status_var.set("Stopped")
-            self.status_var.set("Tracking stopped: add at least one Name region or Name Area.")
+            self.status_var.set("Tracking stopped: select a game/window region first.")
             self.render_detected(self.last_debug_lines, force=True)
             return
-        self.active_scan_auto_area = bool((not self.name_regions) and self.name_scan_area)
+        self.active_scan_auto_area = bool((not self.name_regions) and name_regions)
+        name_area_confirm = Rect(self.name_scan_area.x, self.name_scan_area.y, self.name_scan_area.w, self.name_scan_area.h) if self.name_regions and self.name_scan_area else None
         threshold = AUTO_AREA_MATCH_SCORE if self.active_scan_auto_area else int(float(self.threshold_var.get()))
         self.active_scan_threshold = threshold
         corrections = dict(self.ocr_corrections)
@@ -1548,7 +1610,7 @@ class BattleMonitorApp:
 
         worker = threading.Thread(
             target=self._scan_worker,
-            args=(game_region, name_regions, threshold, corrections, self.scan_tick, self.active_scan_auto_area),
+            args=(game_region, name_regions, threshold, corrections, self.scan_tick, self.active_scan_auto_area, name_area_confirm),
             daemon=True,
         )
         worker.start()
@@ -1622,11 +1684,11 @@ class BattleMonitorApp:
         # Split text before a separated level marker. Avoid splitting inside
         # Pokémon names such as Jigglypuff by requiring whitespace before L/Lv.
         split_patterns = [
-            r"\s+L\s*[VW]?\s*[0-9SBI]{0,3}.*$",
-            r"\s+LV\s*[0-9SBI]{0,3}.*$",
-            r"\s+LVL\s*[0-9SBI]{0,3}.*$",
-            r"\s+LEVEL\s*[0-9SBI]{0,3}.*$",
-            r"\s+LU[GTIS]*\s*[0-9SBI]{0,3}.*$",  # OCR variants of Lv/Lvl.
+            r"\s+L\s*[VW]?\s*[0-9SBI]{0,3}\b.*$",
+            r"\s+LV\s*[0-9SBI]{0,3}\b.*$",
+            r"\s+LVL\s*[0-9SBI]{0,3}\b.*$",
+            r"\s+LEVEL\s*[0-9SBI]{0,3}\b.*$",
+            r"\s+LU[GTIS]*\s*[0-9SBI]{0,3}\b.*$",  # OCR variants of Lv/Lvl.
         ]
         for value in list(variants):
             for pattern in split_patterns:
@@ -1684,9 +1746,101 @@ class BattleMonitorApp:
         normalized = normalize_name(text)
         return bool(
             re.search(r"\bL\s*[VW]?\s*\d{1,3}\b", raw)
-            or re.search(r"\bLV\s*\d{1,3}\b", raw)
-            or re.search(r"\bL[VW]?\s*[0-9SBI]{1,3}\b", normalized)
+            or re.search(r"\bLVL?\s*\d{1,3}\b", raw)
+            or re.search(r"\bLEVEL\s*\d{1,3}\b", raw)
+            or re.search(r"\bL[VWUYI]{0,2}\s*[0-9SBI]{1,3}\b", normalized)
         )
+
+    def _raw_has_gender_marker(self, text: str) -> bool:
+        raw = (text or "").upper()
+        normalized = normalize_name(text)
+        return bool(
+            re.search(r"[♀♂]", raw)
+            or re.search(r"[\u2640\u2642]", raw)
+            or re.search(r"\b(MALE|FEMALE)\b", raw)
+            or re.search(r"\b[MF]\b", normalized)
+        )
+
+    def _word_text_is_level_label(self, text: str) -> bool:
+        compact = re.sub(r"[^A-Z0-9]", "", normalize_name(text))
+        if compact in {"L", "LV", "LW", "LVL", "LWL", "LEVEL"}:
+            return True
+        return bool(re.fullmatch(r"L[VWUYI]{0,2}[0-9SBI]{1,3}", compact))
+
+    def _word_text_is_level_number(self, text: str) -> bool:
+        compact = re.sub(r"[^A-Z0-9]", "", normalize_name(text))
+        return bool(re.fullmatch(r"[0-9SBI]{1,3}", compact))
+
+    def _raw_text_matches_detected_name(self, raw_text: str, match: MatchResult) -> bool:
+        """Return True when OCR text visibly resembles the matched Pokémon."""
+        if not raw_text or not match:
+            return False
+        normalized = normalize_name(raw_text)
+        cleaned = self.repo._clean_ocr_nameplate_text(raw_text)
+        raw_values = [v for v in (normalized, cleaned) if v]
+        compact_raw_values = [re.sub(r"[^A-Z]", "", v) for v in raw_values]
+
+        record = self.repo.pokemon.get(match.key, {}) or {}
+        candidates = [
+            match.display_name,
+            match.key.replace("-", " "),
+            record.get("display_name", ""),
+            record.get("species", "").replace("-", " "),
+        ]
+        for candidate in candidates:
+            candidate_norm = normalize_name(candidate)
+            candidate_compact = re.sub(r"[^A-Z]", "", candidate_norm)
+            if len(candidate_compact) < 3:
+                continue
+            for value, compact_value in zip(raw_values, compact_raw_values):
+                if candidate_norm and (candidate_norm in value or (len(value) >= 4 and value in candidate_norm)):
+                    return True
+                if candidate_compact and compact_value and (
+                    candidate_compact in compact_value
+                    or (len(compact_value) >= 4 and compact_value in candidate_compact)
+                ):
+                    return True
+                if (
+                    candidate_compact
+                    and compact_value
+                    and len(compact_value) >= 5
+                ):
+                    min_len = min(len(compact_value), len(candidate_compact))
+                    length_ratio = min(len(compact_value), len(candidate_compact)) / max(len(compact_value), len(candidate_compact))
+                    similarity = difflib.SequenceMatcher(None, compact_value, candidate_compact).ratio()
+                    score_floor = AUTO_AREA_PANEL_RELAXED_SCORE if min_len >= 6 else MIN_MATCH_SCORE
+                    similarity_floor = 0.74 if min_len >= 7 else 0.82
+                    if match.score >= score_floor and length_ratio >= 0.65 and similarity >= similarity_floor:
+                        return True
+        return False
+
+    def _match_precise_text(self, text: str, threshold: int, corrections: Dict[str, str], source: str = "precise") -> Optional[MatchResult]:
+        """Match OCR from an Add Name crop.
+
+        When a broad Name Area is also configured but does not recognize the
+        current fan-game panel style, precise crops still get a chance. They use
+        stricter evidence so an empty/off-screen crop does not become a random
+        Pokémon card.
+        """
+        strict_unconfirmed = str(source or "").startswith("precise_unconfirmed")
+        effective_threshold = max(threshold, AUTO_AREA_MATCH_SCORE) if strict_unconfirmed else threshold
+        match = self._match_ocr_text(text, effective_threshold, corrections)
+        if not match:
+            return None
+        if self._is_corrected_ocr(text, corrections):
+            return match
+        has_context = (
+            self._raw_text_matches_detected_name(text, match)
+            or self._raw_has_level_marker(text)
+            or self._raw_has_gender_marker(text)
+        )
+        if not strict_unconfirmed:
+            if has_context or match.score >= AUTO_AREA_MATCH_SCORE:
+                return match
+            return None
+        if has_context or match.score >= AUTO_AREA_STRONG_MATCH_SCORE:
+            return match
+        return None
 
     def _is_corrected_ocr(self, text: str, corrections: Dict[str, str]) -> bool:
         return normalize_name(text) in corrections
@@ -1704,22 +1858,32 @@ class BattleMonitorApp:
         source_text = str(source or "")
         if self._is_corrected_ocr(raw_text, corrections):
             return True
-        if match.score >= 99.5:
-            return True
         has_level = self._raw_has_level_marker(raw_text)
+        has_gender = self._raw_has_gender_marker(raw_text)
+        has_name_text = self._raw_text_matches_detected_name(raw_text, match)
         detected_panel = source_text.startswith("detected_panel")
+        has_nameplate_context = has_level or has_gender or has_name_text
+
+        if match.score >= 99.5 and has_name_text:
+            return True
 
         if detected_panel:
+            if has_name_text and match.score >= AUTO_AREA_PANEL_RELAXED_SCORE:
+                return True
+            if match.score >= AUTO_AREA_STRONG_MATCH_SCORE:
+                return True
             if slot_idx == 0:
-                return match.score >= AUTO_AREA_PANEL_RELAXED_SCORE
-            return match.score >= AUTO_AREA_TEXT_PANEL_SCORE
+                if has_nameplate_context and match.score >= AUTO_AREA_PANEL_RELAXED_SCORE:
+                    return True
+                return match.score >= AUTO_AREA_STRONG_MATCH_SCORE
+            return match.score >= AUTO_AREA_TEXT_PANEL_SCORE and has_nameplate_context
 
         if has_level and match.score >= AUTO_AREA_MATCH_SCORE:
             return True
-        if slot_idx == 0 and match.score >= AUTO_AREA_STRONG_MATCH_SCORE:
+        if has_name_text and match.score >= AUTO_AREA_STRONG_MATCH_SCORE:
             return True
         history = self.scan_histories.get(slot_idx)
-        if history and list(history).count(match.key) >= 2 and match.score >= AUTO_AREA_MATCH_SCORE:
+        if has_nameplate_context and history and list(history).count(match.key) >= 2 and match.score >= AUTO_AREA_MATCH_SCORE:
             return True
         return False
 
@@ -1731,12 +1895,18 @@ class BattleMonitorApp:
         when the match is exact/corrected/very high confidence. This reduces the
         alternating phantom second slot seen while scanning broad areas.
         """
-        if slot_idx == 0:
-            return True
-        if self._is_corrected_ocr(raw_text, corrections) or match.score >= 99.5:
+        has_name_text = self._raw_text_matches_detected_name(raw_text, match)
+        has_context = has_name_text or self._raw_has_level_marker(raw_text) or self._raw_has_gender_marker(raw_text)
+        if self._is_corrected_ocr(raw_text, corrections) or (match.score >= 99.5 and has_name_text):
             self.auto_slot_pending.pop(slot_idx, None)
             return True
-        if str(source or "").startswith("detected_panel") and match.score >= 94:
+        if str(source or "").startswith("detected_panel") and has_name_text and match.score >= AUTO_AREA_PANEL_RELAXED_SCORE:
+            self.auto_slot_pending.pop(slot_idx, None)
+            return True
+        if str(source or "").startswith("detected_panel") and match.score >= AUTO_AREA_STRONG_MATCH_SCORE:
+            self.auto_slot_pending.pop(slot_idx, None)
+            return True
+        if str(source or "").startswith("detected_panel") and has_context and match.score >= 94:
             self.auto_slot_pending.pop(slot_idx, None)
             return True
         prev_key, count = self.auto_slot_pending.get(slot_idx, ("", 0))
@@ -1794,6 +1964,147 @@ class BattleMonitorApp:
             return False
         aspect = w / max(1, h)
         return h <= 85 and 2.0 <= aspect <= 8.5
+
+    def detect_hp_anchor_name_regions_from_image(self, image: Image.Image) -> List[Rect]:
+        """Find tight name-line crops by using visible HP bars as anchors."""
+        try:
+            import numpy as np
+        except Exception:
+            return []
+
+        arr = np.array(image.convert("RGB"))
+        if arr.size == 0:
+            return []
+        r = arr[:, :, 0].astype("int16")
+        g = arr[:, :, 1].astype("int16")
+        b = arr[:, :, 2].astype("int16")
+
+        # Enemy HP bars are strong horizontal green/yellow/red elements in the
+        # nameplate. The geometry filter below keeps these color masks from
+        # grabbing similarly colored menu decoration.
+        green_mask = (
+            (g >= 145) &
+            (r >= 35) & (r <= 170) &
+            (b <= 120) &
+            (g >= r + 35) &
+            (g >= b + 45)
+        )
+        yellow_mask = (
+            (r >= 155) &
+            (g >= 135) &
+            (b <= 95) &
+            (np.abs(r - g) <= 95) &
+            (r >= b + 70) &
+            (g >= b + 55)
+        )
+        red_mask = (
+            (r >= 150) &
+            (g >= 35) & (g <= 125) &
+            (b <= 100) &
+            (r >= g + 45) &
+            (r >= b + 60)
+        )
+        mask = green_mask | yellow_mask | red_mask
+        img_h, img_w = mask.shape
+        if img_w < 80 or img_h < 60:
+            return []
+
+        seen = np.zeros_like(mask, dtype=bool)
+        bars = []
+        min_pixels = max(24, int(img_w * img_h * 0.00035))
+        for y in range(img_h):
+            xs = np.where(mask[y] & (~seen[y]))[0]
+            for x in xs:
+                if seen[y, x] or not mask[y, x]:
+                    continue
+                stack = [(int(x), int(y))]
+                seen[y, x] = True
+                min_x = max_x = int(x)
+                min_y = max_y = int(y)
+                count = 0
+                while stack:
+                    cx, cy = stack.pop()
+                    count += 1
+                    if cx < min_x: min_x = cx
+                    if cx > max_x: max_x = cx
+                    if cy < min_y: min_y = cy
+                    if cy > max_y: max_y = cy
+                    for nx, ny in ((cx + 1, cy), (cx - 1, cy), (cx, cy + 1), (cx, cy - 1)):
+                        if 0 <= nx < img_w and 0 <= ny < img_h and (not seen[ny, nx]) and mask[ny, nx]:
+                            seen[ny, nx] = True
+                            stack.append((nx, ny))
+
+                bw = max_x - min_x + 1
+                bh = max_y - min_y + 1
+                if count < min_pixels:
+                    continue
+                if bw < max(55, int(img_w * 0.08)) or bh < 3 or bh > 28:
+                    continue
+                if bw / max(1, bh) < 5.0:
+                    continue
+                if bw > max(380, int(img_w * 0.48)):
+                    continue
+                frame_pad = max(3, min(12, bh * 2))
+                fx1 = max(0, min_x - 5)
+                fx2 = min(img_w, max_x + 6)
+                top_frame = arr[max(0, min_y - frame_pad):min_y, fx1:fx2]
+                bottom_frame = arr[max_y + 1:min(img_h, max_y + 1 + frame_pad), fx1:fx2]
+                frame_parts = [part for part in (top_frame, bottom_frame) if part.size]
+                if not frame_parts:
+                    continue
+                frame = np.concatenate([part.reshape(-1, 3) for part in frame_parts], axis=0)
+                dark_frame = frame.mean(axis=1) < 80
+                bright_frame = (frame.mean(axis=1) > 175) & (frame.std(axis=1) < 55)
+                dark_hits = int(dark_frame.sum())
+                frame_hits = int((dark_frame | bright_frame).sum())
+                if dark_hits < max(8, int(bw * 0.035)):
+                    continue
+                if frame_hits < max(12, int(bw * 0.08)):
+                    continue
+                bars.append((min_x, min_y, max_x, max_y, bw, bh, count))
+
+        if not bars:
+            return []
+
+        # Merge duplicate components from thresholding/segmented HP bars.
+        merged = []
+        for bar in sorted(bars, key=lambda item: (item[1], item[0])):
+            x1, y1, x2, y2, bw, bh, count = bar
+            joined = False
+            for i, old in enumerate(merged):
+                ox1, oy1, ox2, oy2, oc = old
+                same_row = abs(((y1 + y2) / 2) - ((oy1 + oy2) / 2)) <= max(8, bh * 1.5)
+                close_x = x1 <= ox2 + 20 and x2 >= ox1 - 20
+                if same_row and close_x:
+                    merged[i] = (min(ox1, x1), min(oy1, y1), max(ox2, x2), max(oy2, y2), oc + count)
+                    joined = True
+                    break
+            if not joined:
+                merged.append((x1, y1, x2, y2, count))
+
+        regions: List[Rect] = []
+        for x1, y1, x2, y2, _count in merged:
+            bar_w = x2 - x1 + 1
+            bar_h = y2 - y1 + 1
+            name_h = max(50, min(88, int(bar_h * 6.4)))
+            if y1 < max(42, int(name_h * 0.75)):
+                continue
+            gap = max(3, int(bar_h * 0.5))
+            if bar_w >= 360:
+                left_expand = max(8, int(bar_w * 0.02))
+            elif bar_w >= 260:
+                left_expand = max(32, int(bar_w * 0.18))
+            else:
+                left_expand = max(58, int(bar_w * 0.32))
+            rx = max(0, x1 - left_expand)
+            ry = max(0, y1 - name_h - gap)
+            right = min(img_w, x1 + max(130, int(bar_w * 0.64)))
+            rw = max(70, right - rx)
+            rh = min(img_h - ry, name_h)
+            if rw >= 70 and rh >= 24:
+                regions.append(Rect(rx, ry, rw, rh))
+
+        return self._merge_nameplate_regions(regions, image.size)
 
     def detect_text_nameplate_regions_from_image(self, image: Image.Image) -> List[Rect]:
         """Find nameplates using OCR text evidence instead of a fixed UI color.
@@ -1862,22 +2173,57 @@ class BattleMonitorApp:
 
             raw_upper = compact.upper()
             normalized = normalize_name(compact)
-            has_level = self._raw_has_level_marker(compact) or bool(re.search(r"\b(LV|LVL|LEVEL|L)\s*[0-9SBI]{1,3}\b", raw_upper))
+            level_label_boxes = [b for b in row if self._word_text_is_level_label(b.text)]
+            level_number_boxes = [b for b in row if self._word_text_is_level_number(b.text)]
+            embedded_level_boxes = [
+                b for b in level_label_boxes
+                if re.search(r"[0-9SBI]", re.sub(r"[^A-Z0-9]", "", normalize_name(b.text)))
+            ]
+            split_level_boxes = []
+            for label in level_label_boxes:
+                if label in embedded_level_boxes:
+                    continue
+                label_right = label.left + label.width
+                nearby_number = next(
+                    (
+                        num for num in level_number_boxes
+                        if num.left >= label.left - 4
+                        and num.left - label_right <= max(56, int(line_h * 3.2))
+                        and abs((num.top + num.height / 2) - (label.top + label.height / 2)) <= row_tol
+                    ),
+                    None,
+                )
+                if nearby_number:
+                    split_level_boxes.extend([label, nearby_number])
+            gender_boxes = [b for b in row if self._raw_has_gender_marker(b.text)]
+            anchor_boxes = embedded_level_boxes + split_level_boxes + gender_boxes
+            has_level = bool(embedded_level_boxes or split_level_boxes) or self._raw_has_level_marker(compact) or bool(re.search(r"\b(LV|LVL|LEVEL|L)\s*[0-9SBI]{1,3}\b", raw_upper))
             has_number = bool(re.search(r"\d", compact))
-            has_gender = bool(re.search(r"[♀♂]", compact) or re.search(r"\b(MALE|FEMALE)\b", raw_upper))
+            has_gender = bool(gender_boxes or self._raw_has_gender_marker(compact))
+            has_anchor = has_level or has_gender
             corrected = self._is_corrected_ocr(compact, self.ocr_corrections)
             match = self.repo.match_name(compact, min_score=76)
             exactish = bool(match and (match.score >= 98 or normalize_name(match.display_name) in normalized or normalized in self.repo.candidate_to_key))
             has_name = bool(match and match.score >= 82)
 
-            # Require real name evidence. A level number alone is not enough,
-            # and a fuzzy name alone must be extremely strong because overworld
-            # textures can OCR into plausible-looking junk.
+            # Require either name evidence or a real nameplate anchor. Anchors
+            # create candidate crops only; the OCR match gate still has to find
+            # a whitelisted Pokemon name before anything is displayed.
             if not corrected:
-                if not has_name:
+                if not has_name and not has_anchor:
                     continue
-                if not (has_level or has_gender or (has_number and match and match.score >= 94) or exactish or (match and match.score >= AUTO_AREA_STRONG_MATCH_SCORE)):
+                if has_name and not (has_anchor or (has_number and match and match.score >= 94) or exactish or (match and match.score >= AUTO_AREA_STRONG_MATCH_SCORE)):
                     continue
+
+            if has_anchor and anchor_boxes:
+                first_anchor_x = min(b.left for b in anchor_boxes)
+                name_w = max(82, min(int(img_w * 0.48), max(int(line_h * 8.5), first_anchor_x - x1 + int(line_h * 1.2))))
+                pad_y = max(7, int(line_h * 0.75))
+                rx = max(0, first_anchor_x - name_w)
+                ry = max(0, y1 - pad_y)
+                rw = min(img_w - rx, max(60, first_anchor_x - rx + int(line_h * 1.8)))
+                rh = min(img_h - ry, line_h + pad_y * 2)
+                candidates.append(Rect(rx, ry, rw, rh))
 
             # Expand from the text row to a likely full panel. Expand more to
             # the right because Lv/HP bars often sit there; expand vertically to
@@ -1901,16 +2247,22 @@ class BattleMonitorApp:
         remains as a fallback for GBA-style UI, but Name Area is no longer tied
         to purple-only nameplates.
         """
+        hp_regions = self.detect_hp_anchor_name_regions_from_image(image)
         text_regions = self.detect_text_nameplate_regions_from_image(image)
+        anchored_regions = (
+            self._merge_nameplate_regions(hp_regions, image.size)
+            if hp_regions
+            else self._merge_nameplate_regions(text_regions, image.size)
+        )
         try:
             import numpy as np
         except Exception:
-            return text_regions
+            return anchored_regions
 
         rgb = image.convert("RGB")
         arr = np.array(rgb)
         if arr.size == 0:
-            return text_regions
+            return anchored_regions
         r = arr[:, :, 0].astype("int16")
         g = arr[:, :, 1].astype("int16")
         b = arr[:, :, 2].astype("int16")
@@ -1986,9 +2338,58 @@ class BattleMonitorApp:
             kept.append(comp)
         kept = sorted(kept, key=lambda c: (c[1], c[0]))[:4]
         color_regions = [Rect(int(x), int(y), int(w_), int(h_)) for x, y, w_, h_, _ in kept]
-        return self._merge_nameplate_regions(text_regions + color_regions, image.size)
+        if anchored_regions:
+            return anchored_regions
+        return self._merge_nameplate_regions(color_regions, image.size)
 
-    def _scan_worker(self, game_region: Rect, name_regions: List[Rect], threshold: int, corrections: Dict[str, str], scan_tick: int, auto_area_mode: bool = False) -> None:
+    def auto_panel_scan_variants(self, image: Image.Image, panel: Rect) -> List[tuple[str, Image.Image]]:
+        """Return OCR crops for one auto-detected panel/name strip."""
+        variants: List[tuple[str, Image.Image]] = []
+        seen_rects = set()
+
+        def add(name: str, rect: Rect) -> None:
+            x1 = max(0, min(rect.x, image.width - 1))
+            y1 = max(0, min(rect.y, image.height - 1))
+            x2 = max(x1 + 1, min(image.width, rect.x + rect.w))
+            y2 = max(y1 + 1, min(image.height, rect.y + rect.h))
+            key = (x1, y1, x2, y2)
+            if key in seen_rects:
+                return
+            if x2 - x1 >= 70 and y2 - y1 >= 22:
+                seen_rects.add(key)
+                variants.append((name, image.crop((x1, y1, x2, y2))))
+
+        left_shifts = []
+        if panel.w >= 180:
+            left_shifts = [shift for shift in (24, 52, 78) if panel.w - shift >= 110]
+
+        # HP-anchor detection can intentionally over-expand left so the panel is
+        # not missed. When that happens, try Add Name-style left trims before
+        # the whole strip; they are usually closer to the real text baseline.
+        if panel.x <= 10:
+            for shift in left_shifts:
+                add(f"shift{shift}", Rect(panel.x + shift, panel.y, panel.w - shift, panel.h))
+            add("full", panel)
+        else:
+            add("full", panel)
+            for shift in left_shifts[:2]:
+                add(f"shift{shift}", Rect(panel.x + shift, panel.y, panel.w - shift, panel.h))
+
+        if panel.w >= 220:
+            inset_x = max(8, int(panel.w * 0.04))
+            add("inner", Rect(panel.x + inset_x, panel.y, panel.w - inset_x, panel.h))
+        return variants[:6]
+
+    def _scan_worker(
+        self,
+        game_region: Rect,
+        name_regions: List[Rect],
+        threshold: int,
+        corrections: Dict[str, str],
+        scan_tick: int,
+        auto_area_mode: bool = False,
+        name_area_confirm: Optional[Rect] = None,
+    ) -> None:
         """Capture configured name regions and OCR them off the Tk UI thread.
 
         v21 deliberately restores the old successful behaviour: as soon as OCR
@@ -2014,43 +2415,77 @@ class BattleMonitorApp:
                     panels = self.detect_nameplate_regions_from_image(area_img)
                     if panels:
                         for slot_idx, panel in enumerate(panels):
-                            scan_items.append((slot_idx, area_img.crop((panel.x, panel.y, panel.x + panel.w, panel.y + panel.h)), f"detected_panel@{panel.x},{panel.y}"))
+                            variants = [
+                                (f"detected_panel_{variant_name}@{panel.x},{panel.y}", crop)
+                                for variant_name, crop in self.auto_panel_scan_variants(area_img, panel)
+                            ]
+                            scan_items.append((slot_idx, variants))
                     elif self._name_area_full_fallback_allowed(area_img):
-                        scan_items.append((0, area_img, "name_area_full"))
+                        scan_items.append((0, [("name_area_full", area_img)]))
                     else:
                         results.append({"idx": 0, "source": "name_area_no_panel", "attempts": [], "best": None, "best_preset": "", "capture_error": None})
                 else:
+                    confirmed_panels: Optional[List[Rect]] = None
+                    if name_area_confirm:
+                        abs_area = Rect(game_region.x + name_area_confirm.x, game_region.y + name_area_confirm.y, name_area_confirm.w, name_area_confirm.h)
+                        monitor = {"left": abs_area.x, "top": abs_area.y, "width": abs_area.w, "height": abs_area.h}
+                        shot = sct.grab(monitor)
+                        area_img = Image.frombytes("RGB", shot.size, shot.rgb)
+                        confirmed_panels = [
+                            Rect(name_area_confirm.x + panel.x, name_area_confirm.y + panel.y, panel.w, panel.h)
+                            for panel in self.detect_nameplate_regions_from_image(area_img)
+                        ]
                     for idx, rel in enumerate(name_regions):
+                        if confirmed_panels is not None:
+                            if not confirmed_panels:
+                                source = "precise_unconfirmed_area"
+                            elif not any(self.rects_overlap(rel, panel) for panel in confirmed_panels):
+                                source = "precise_unconfirmed_area"
+                            else:
+                                source = "precise_confirmed"
+                        else:
+                            source = "precise"
                         abs_rect = Rect(game_region.x + rel.x, game_region.y + rel.y, rel.w, rel.h)
                         monitor = {"left": abs_rect.x, "top": abs_rect.y, "width": abs_rect.w, "height": abs_rect.h}
                         shot = sct.grab(monitor)
                         img = Image.frombytes("RGB", shot.size, shot.rgb)
-                        scan_items.append((idx, img, "precise"))
+                        scan_items.append((idx, [(source, img)]))
 
-                for idx, img, source in scan_items:
+                for idx, variants in scan_items:
                     attempts = []
                     best = None
                     best_preset = ""
+                    result_source = variants[0][0] if variants else ""
                     try:
                         # Stream OCR attempts one-by-one and stop as soon as a
                         # Pokémon name is recognized. This keeps the live loop
                         # responsive and avoids doing many slow Tesseract calls.
-                        for attempt in self.ocr.iter_text_attempts(img):
-                            attempts.append(attempt)
-                            if attempt.text:
-                                match = self._match_auto_area_text(attempt.text, threshold, corrections, source) if auto_area_mode else self._match_ocr_text(attempt.text, threshold, corrections)
-                                if match and auto_area_mode and not self._auto_area_match_allowed(match, attempt.text, corrections, idx, source):
-                                    match = None
-                                if match and (best is None or match.score > best.score):
-                                    best = match
-                                    best_preset = f"{source}/{attempt.preset}"
-                                    if best.score >= threshold:
-                                        break
+                        stop_slot = False
+                        for source, img in variants:
+                            for attempt in self.ocr.iter_text_attempts(img):
+                                attempts.append(attempt)
+                                if attempt.text:
+                                    match = self._match_auto_area_text(attempt.text, threshold, corrections, source) if auto_area_mode else self._match_precise_text(attempt.text, threshold, corrections, source)
+                                    if match and auto_area_mode and not self._auto_area_match_allowed(match, attempt.text, corrections, idx, source):
+                                        match = None
+                                    if match and (best is None or match.score > best.score):
+                                        best = match
+                                        result_source = source
+                                        best_preset = f"{source}/{attempt.preset}"
+                                        accepted_auto_panel = bool(
+                                            auto_area_mode
+                                            and self._auto_area_match_allowed(best, best.raw_text, corrections, idx, source)
+                                        )
+                                        if best.score >= threshold or accepted_auto_panel:
+                                            stop_slot = True
+                                            break
+                            if stop_slot:
+                                break
                     except Exception as exc:
-                        results.append({"idx": idx, "source": source, "capture_error": str(exc), "attempts": [], "best": None, "best_preset": ""})
+                        results.append({"idx": idx, "source": result_source, "capture_error": str(exc), "attempts": [], "best": None, "best_preset": ""})
                         continue
 
-                    results.append({"idx": idx, "source": source, "attempts": attempts, "best": best, "best_preset": best_preset, "capture_error": None})
+                    results.append({"idx": idx, "source": result_source, "attempts": attempts, "best": best, "best_preset": best_preset, "capture_error": None})
         except Exception as exc:
             worker_error = str(exc)
 
@@ -2115,7 +2550,7 @@ class BattleMonitorApp:
                     fallback_texts.append(" ".join(fallback_texts[:3]))
                 for raw_text in fallback_texts:
                     source_name = result.get("source", "")
-                    candidate = self._match_auto_area_text(raw_text, threshold, corrections, source_name) if auto_area_mode else self._match_ocr_text(raw_text, threshold, corrections)
+                    candidate = self._match_auto_area_text(raw_text, threshold, corrections, source_name) if auto_area_mode else self._match_precise_text(raw_text, threshold, corrections, source_name)
                     if candidate and auto_area_mode and not self._auto_area_match_allowed(candidate, raw_text, corrections, idx, source_name):
                         candidate = None
                     if candidate and (best is None or candidate.score > best.score):
@@ -2139,13 +2574,22 @@ class BattleMonitorApp:
                     f"Slot {idx + 1}: raw='{best.raw_text}' normalized='{best.normalized_text}' → {best.display_name} ({best.score:.1f}) via {best_preset}"
                 )
             else:
-                self.slot_miss_counts[idx] = self.slot_miss_counts.get(idx, 0) + 1
-                if self.slot_miss_counts[idx] >= LOW_CONFIDENCE_CLEAR_SCANS and idx in self.current_keys:
-                    self.current_keys.pop(idx, None)
-                    self.slot_form_overrides.pop(idx, None)
                 debug_text = "; ".join(f"{a.preset}:{a.text!r}" for a in attempts[:4]) or "no OCR text"
                 source = result.get("source") or ("Name Area" if auto_area_mode else "Name")
-                debug_lines.append(f"Slot {idx + 1}: waiting / no confident match from {source}. {debug_text}")
+                if allowed and auto_area_mode:
+                    self.slot_miss_counts[idx] = 0
+                    pending_key, pending_count = self.auto_slot_pending.get(idx, ("", 0))
+                    debug_lines.append(
+                        f"Slot {idx + 1}: pending Name Area confirmation"
+                        f" ({pending_count}/{AUTO_AREA_SECOND_SLOT_CONFIRM_SCANS}) from {source}. {debug_text}"
+                    )
+                else:
+                    self.slot_miss_counts[idx] = self.slot_miss_counts.get(idx, 0) + 1
+                    self.auto_slot_pending.pop(idx, None)
+                    if self.slot_miss_counts[idx] >= LOW_CONFIDENCE_CLEAR_SCANS and idx in self.current_keys:
+                        self.current_keys.pop(idx, None)
+                        self.slot_form_overrides.pop(idx, None)
+                    debug_lines.append(f"Slot {idx + 1}: waiting / no confident match from {source}. {debug_text}")
 
         # If dynamic Name Area detection no longer sees a previous auto slot,
         # clear it after a short debounce. This prevents a stale/flickering Slot
@@ -2154,6 +2598,7 @@ class BattleMonitorApp:
         for stale_idx in list(self.current_keys.keys()):
             if stale_idx not in seen_result_slots:
                 self.slot_miss_counts[stale_idx] = self.slot_miss_counts.get(stale_idx, 0) + 1
+                self.auto_slot_pending.pop(stale_idx, None)
                 if self.slot_miss_counts[stale_idx] >= LOW_CONFIDENCE_CLEAR_SCANS:
                     self.current_keys.pop(stale_idx, None)
                     self.slot_form_overrides.pop(stale_idx, None)
@@ -2168,10 +2613,13 @@ class BattleMonitorApp:
             for slot_idx, values in list(current_scan_texts.items()):
                 for raw_text in values:
                     source_name = "ui_direct"
-                    match = self._match_auto_area_text(raw_text, threshold, corrections, source_name) if auto_area_mode else self._match_ocr_text(raw_text, threshold, corrections)
+                    match = self._match_auto_area_text(raw_text, threshold, corrections, source_name) if auto_area_mode else self._match_precise_text(raw_text, threshold, corrections, source_name)
                     if match and auto_area_mode and not self._auto_area_match_allowed(match, raw_text, corrections, slot_idx, source_name):
                         match = None
+                    if match and auto_area_mode and not self._auto_slot_confirmed(slot_idx, match, match.raw_text, corrections, source_name):
+                        match = None
                     if match and match.score >= threshold:
+                        self.auto_slot_pending.pop(slot_idx, None)
                         self.slot_miss_counts[slot_idx] = 0
                         self.current_keys[slot_idx] = self.apply_slot_form_override(slot_idx, match.key)
                         debug_lines.append(
@@ -2265,11 +2713,11 @@ class BattleMonitorApp:
             title = "Ready. Click Start to begin tracking."
             subtitle = "Game region and name region are set. Use Show Preview only if you need to tune the crop."
         elif self.game_region:
-            title = "Game region set. Add a name region or Name Area next."
-            subtitle = "Click Add Name for precise slots, or Name Area to scan a broader area containing opponent nameplates."
+            title = "Game region set. Auto nameplate scan is ready."
+            subtitle = "Add Name and Name Area are optional if this game needs extra help."
         else:
             title = "Idle. Select the game/window region to begin."
-            subtitle = "Use Window Region for emulators where possible, then Add Name for the Pokémon name box."
+            subtitle = "Use Window Region where possible; the app will scan the top-left battle area automatically."
 
         tk.Label(
             placeholder,
@@ -2673,8 +3121,8 @@ class BattleMonitorApp:
             },
             {
                 "target": self.add_name_button,
-                "title": "2. Mark the Pokémon name box",
-                "body": "Click Add Name for a tight enemy-name crop, or use Name Area for one broad area containing possible opponent nameplates. Either one is enough to start.",
+                "title": "2. Optional name tuning",
+                "body": "The app can auto-scan the top-left battle area. Use Add Name and Name Area only if this game needs tighter guidance.",
                 "action_label": "Add Name Region",
                 "action": self.add_name_region,
                 "complete": self.has_any_name_tracking_region,
@@ -2723,9 +3171,9 @@ class BattleMonitorApp:
         ]
 
     def is_auto_name_region(self, region: Rect) -> bool:
-        if not self.game_region:
+        auto = self.automatic_name_scan_area()
+        if not auto:
             return False
-        auto = Rect(0, 0, self.game_region.w // 2, self.game_region.h // 2)
         return region == auto
 
     def has_precise_name_regions(self) -> bool:
@@ -2741,10 +3189,12 @@ class BattleMonitorApp:
         effective = self.effective_name_regions()
         if self.name_regions:
             names = f"{len(self.name_regions)} precise name region(s)"
+            if self.name_scan_area:
+                names += " with Name Area confirmation"
         elif self.name_scan_area:
             names = f"name area → {len(effective)} auto slot(s)"
         else:
-            names = "no name regions yet"
+            names = "auto top-left nameplate scan"
         ocr = "OCR ready" if self.ocr.available else "OCR not ready"
         return f"Status: {region} • {names} • {ocr}"
 
@@ -2968,6 +3418,153 @@ class BattleMonitorApp:
         self.setup_tour_window = None
         self.setup_tour_fixed_geometry = None
 
+    def build_ocr_engine_comparison_lines(self) -> List[str]:
+        if not self.game_region:
+            return ["Select a game region first."]
+        regions = list(self.name_regions)
+        using_auto_default = False
+        if not regions:
+            regions = self.derive_regions_from_name_area()
+            using_auto_default = self.name_scan_area is None
+        if not regions:
+            return ["Select a game/window region first."]
+
+        threshold = int(float(self.threshold_var.get()))
+        corrections = dict(self.ocr_corrections)
+        lines: List[str] = []
+
+        def best_match_for_image(img: Image.Image, source: str, slot_idx: int, auto_mode: bool):
+            attempts = []
+            best = None
+            best_preset = ""
+            compare_threshold = AUTO_AREA_MATCH_SCORE if auto_mode else threshold
+            for attempt_count, attempt in enumerate(self.ocr.iter_text_attempts(img), start=1):
+                if attempt.text:
+                    match = (
+                        self._match_auto_area_text(attempt.text, compare_threshold, corrections, source)
+                        if auto_mode
+                        else self._match_precise_text(attempt.text, compare_threshold, corrections, source)
+                    )
+                    allowed = bool(match)
+                    if match and auto_mode:
+                        allowed = self._auto_area_match_allowed(match, attempt.text, corrections, slot_idx, source)
+                    attempts.append((attempt, match, allowed))
+                    if allowed and match and (best is None or match.score > best.score):
+                        best = match
+                        best_preset = attempt.preset
+                        if (not auto_mode and match.score >= compare_threshold) or auto_mode:
+                            break
+                if attempt_count >= 12:
+                    break
+            return best, best_preset, attempts
+
+        def attempt_summary(attempts) -> str:
+            bits = []
+            for attempt, match, allowed in attempts[:4]:
+                if match:
+                    suffix = match.display_name if allowed else f"{match.display_name} rejected"
+                else:
+                    suffix = "none"
+                bits.append(f"{attempt.text!r}->{suffix}")
+            return ", ".join(bits) if bits else "no OCR text"
+
+        with mss.mss() as local_sct:
+            if not self.name_regions:
+                rel = regions[0]
+                abs_rect = Rect(self.game_region.x + rel.x, self.game_region.y + rel.y, rel.w, rel.h)
+                try:
+                    area_img = self.capture_rect_with_grabber(local_sct, abs_rect)
+                except Exception as exc:
+                    return [f"Auto scan capture error: {exc}"]
+
+                lines.append(f"Auto scan area ({rel.w}x{rel.h} at +{rel.x},+{rel.y})")
+                if self.name_scan_area:
+                    lines.append("  Mode: Name Area auto-detect")
+                elif using_auto_default:
+                    lines.append("  Mode: top-left auto-detect")
+
+                panels = self.detect_nameplate_regions_from_image(area_img)
+                if panels:
+                    lines.append(f"  Detected panels: {len(panels)}")
+                    for slot_idx, panel in enumerate(panels[:MAX_NAME_REGIONS]):
+                        variants = self.auto_panel_scan_variants(area_img, panel)
+                        variant_names = ", ".join(name for name, _crop in variants)
+                        lines.append(
+                            f"Slot {slot_idx + 1} panel ({panel.w}x{panel.h} at +{rel.x + panel.x},+{rel.y + panel.y})"
+                        )
+                        lines.append(f"  Variants: {variant_names}")
+
+                        best = None
+                        best_preset = ""
+                        best_variant = ""
+                        collected_attempts = []
+                        for variant_name, crop in variants:
+                            source = f"detected_panel_{variant_name}@{panel.x},{panel.y}"
+                            variant_best, variant_preset, attempts = best_match_for_image(crop, source, slot_idx, auto_mode=True)
+                            collected_attempts.extend(attempts)
+                            if variant_best and (best is None or variant_best.score > best.score):
+                                best = variant_best
+                                best_preset = variant_preset
+                                best_variant = variant_name
+                            if variant_best:
+                                break
+
+                        if best:
+                            lines.append(
+                                f"  Tesseract best: {best.raw_text!r} -> {best.display_name} "
+                                f"({best.score:.1f}) via {best_variant}/{best_preset}"
+                            )
+                        else:
+                            lines.append(f"  Tesseract best: no match. Attempts: {attempt_summary(collected_attempts)}")
+                    return lines
+
+                if not self._name_area_full_fallback_allowed(area_img):
+                    lines.append("  Detected panels: 0")
+                    lines.append("  Broad area is too large for safe full-crop OCR; try a smaller Name Area or Add Name crop.")
+                    return lines
+
+                lines.append("  Detected panels: 0; testing full-area fallback")
+                best, best_preset, attempts = best_match_for_image(area_img, "name_area_full", 0, auto_mode=True)
+                if best:
+                    lines.append(
+                        f"  Tesseract best: {best.raw_text!r} -> {best.display_name} "
+                        f"({best.score:.1f}) via {best_preset}"
+                    )
+                else:
+                    lines.append(f"  Tesseract best: no match. Attempts: {attempt_summary(attempts)}")
+                return lines
+
+            for idx, rel in enumerate(regions[:MAX_NAME_REGIONS]):
+                abs_rect = Rect(self.game_region.x + rel.x, self.game_region.y + rel.y, rel.w, rel.h)
+                try:
+                    img = self.capture_rect_with_grabber(local_sct, abs_rect)
+                except Exception as exc:
+                    lines.append(f"Slot {idx + 1}: capture error: {exc}")
+                    continue
+
+                lines.append(f"Slot {idx + 1} ({rel.w}x{rel.h} at +{rel.x},+{rel.y})")
+                if self.name_regions and self.name_scan_area:
+                    confirmation = "active" if self.rects_overlap(rel, self.name_scan_area, margin=0) else "configured"
+                    lines.append(f"  Name Area confirmation: {confirmation}")
+                elif self.name_regions:
+                    lines.append("  Name Area confirmation: not set")
+                elif self.name_scan_area:
+                    lines.append("  Name Area auto-detect mode")
+                elif using_auto_default:
+                    lines.append("  Auto top-left nameplate scan")
+
+                tesseract_best, tesseract_preset, tesseract_attempts = best_match_for_image(img, "precise_compare", idx, auto_mode=False)
+                if tesseract_best:
+                    lines.append(
+                        f"  Tesseract best: {tesseract_best.raw_text!r} -> {tesseract_best.display_name} "
+                        f"({tesseract_best.score:.1f}) via {tesseract_preset}"
+                    )
+                elif tesseract_attempts:
+                    lines.append(f"  Tesseract best: no match. Attempts: {attempt_summary(tesseract_attempts)}")
+                else:
+                    lines.append("  Tesseract best: no OCR text")
+        return lines
+
     def add_ocr_fix_dialog(self) -> None:
         recent_items = []
         for slot, texts in sorted(self.last_slot_attempt_texts.items()):
@@ -3008,8 +3605,53 @@ class BattleMonitorApp:
                     raw_var.set(recent_items[sel[0]][1])
             recent_box.bind("<<ListboxSelect>>", use_recent)
 
+        tk.Label(dialog, text="OCR read check", bg=PAGE_BG, fg=MUTED, font=("Segoe UI", 8)).grid(row=5, column=0, sticky="nw", padx=12, pady=(8, 2))
+        compare_frame = tk.Frame(dialog, bg=PAGE_BG)
+        compare_frame.grid(row=5, column=1, sticky="ew", padx=12, pady=(8, 2))
+        compare_text = tk.Text(compare_frame, width=58, height=9, bg=CARD_BG, fg=TEXT, insertbackground=TEXT, wrap="word", relief="solid", borderwidth=1, font=("Consolas", 8))
+        compare_text.pack(fill="both", expand=True)
+        compare_text.insert("end", "Read check will run in the background.\n")
+        compare_text.configure(state="disabled")
+        refresh_running = {"active": False}
+        refresh_button = None
+
+        def refresh_comparison() -> None:
+            if refresh_running["active"]:
+                return
+            refresh_running["active"] = True
+            if refresh_button and refresh_button.winfo_exists():
+                refresh_button.configure(state="disabled")
+            compare_text.configure(state="normal")
+            compare_text.delete("1.0", "end")
+            compare_text.insert("end", "Running read check...\n")
+            compare_text.configure(state="disabled")
+
+            def worker() -> None:
+                try:
+                    lines = self.build_ocr_engine_comparison_lines()
+                except Exception as exc:
+                    lines = [f"Read check failed: {exc}"]
+
+                def finish() -> None:
+                    refresh_running["active"] = False
+                    try:
+                        if refresh_button and refresh_button.winfo_exists():
+                            refresh_button.configure(state="normal")
+                        if not dialog.winfo_exists():
+                            return
+                        compare_text.configure(state="normal")
+                        compare_text.delete("1.0", "end")
+                        compare_text.insert("end", "\n".join(lines))
+                        compare_text.configure(state="disabled")
+                    except tk.TclError:
+                        return
+
+                self.root.after(0, finish)
+
+            threading.Thread(target=worker, daemon=True).start()
+
         result_label = tk.Label(dialog, text="", bg=PAGE_BG, fg=MUTED, font=("Segoe UI", 8), wraplength=440, justify="left")
-        result_label.grid(row=5, column=0, columnspan=2, sticky="w", padx=12, pady=(6, 0))
+        result_label.grid(row=6, column=0, columnspan=2, sticky="w", padx=12, pady=(6, 0))
 
         def save_fix() -> None:
             raw = raw_var.get().strip()
@@ -3028,10 +3670,13 @@ class BattleMonitorApp:
             self.status_var.set(f"OCR correction saved: {normalized} → {match.display_name}")
 
         buttons = tk.Frame(dialog, bg=PAGE_BG)
-        buttons.grid(row=6, column=0, columnspan=2, sticky="ew", padx=12, pady=12)
+        buttons.grid(row=7, column=0, columnspan=2, sticky="ew", padx=12, pady=12)
         ttk.Button(buttons, text="Save", command=save_fix).pack(side="right", padx=(6, 0))
         ttk.Button(buttons, text="Close", command=dialog.destroy).pack(side="right")
+        refresh_button = ttk.Button(buttons, text="Refresh Read", command=refresh_comparison)
+        refresh_button.pack(side="left")
         raw_entry.focus_set()
+        dialog.after(100, refresh_comparison)
         dialog.bind("<Return>", lambda _event: save_fix())
         dialog.bind("<Escape>", lambda _event: dialog.destroy())
         dialog.wait_window()

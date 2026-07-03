@@ -9,7 +9,8 @@ from typing import List, Optional
 
 from PIL import Image, ImageFilter, ImageOps
 
-OCR_TIMEOUT_SECONDS = 1.0
+OCR_TEXT_TIMEOUT_SECONDS = 0.7
+OCR_WORD_TIMEOUT_SECONDS = 1.0
 
 try:
     import pytesseract
@@ -128,15 +129,30 @@ class OcrEngine:
             pytesseract.pytesseract.tesseract_cmd = self.tesseract_cmd
 
     def candidate_crops(self, image: Image.Image) -> List[tuple[str, Image.Image]]:
-        """Return OCR crops for both tight text boxes and whole Pokémon HP/name boxes.
-
-        Users often drag around the entire battle nameplate. For GBA/DS-style
-        battle UIs, the actual Pokémon name is usually in the upper-left part of
-        that region, while level/HP bars add noise. Keeping the full crop first
-        still supports users who select only the text itself.
-        """
+        """Return OCR crops for both tight text strips and whole nameplates."""
         crops: List[tuple[str, Image.Image]] = []
         w, h = image.size
+        aspect = w / max(1, h)
+        tight_text_band = w >= 80 and h <= 115 and aspect >= 2.0
+
+        if tight_text_band:
+            # Add Name regions are usually already the user's exact text strip.
+            # If the strip is very wide, it likely includes gender/level text.
+            # Try the left/name portion first so that Lv/HP decoration does not
+            # dominate the first Tesseract read.
+            if aspect >= 5.5:
+                crops.append(("tight_name_left", image.crop((0, 0, max(1, int(w * 0.70)), h))))
+                crops.append(("tight_name_left_short", image.crop((0, 0, max(1, int(w * 0.55)), h))))
+            # Then read the strip as one line; proportional sub-crops can cut
+            # long names or fan-game font descenders and create garbage reads.
+            crops.append(("tight_full", image))
+            inset_x = max(1, int(w * 0.01))
+            inset_y = max(1, int(h * 0.03))
+            if w - inset_x > inset_x and h - inset_y > inset_y:
+                crops.append(("tight_inner", image.crop((inset_x, inset_y, w - inset_x, h - inset_y))))
+            crops.append(("tight_left_wide", image.crop((0, 0, max(1, int(w * 0.78)), h))))
+            return crops
+
         # For full Pokémon nameplates, OCR works best when the level, HP bar,
         # gender symbol, and right-side border are excluded. Try these name-only
         # crops first so the live loop can accept a clean match before slower
@@ -151,30 +167,39 @@ class OcrEngine:
             crops.append(("inner_name", image.crop((max(0, int(w * 0.04)), max(0, int(h * 0.08)), max(1, int(w * 0.52)), max(1, int(h * 0.58))))))
         return crops
 
-    def preprocess_variants(self, image: Image.Image) -> List[tuple[str, Image.Image]]:
+    def preprocess_variants(self, image: Image.Image, fast: bool = False) -> List[tuple[str, Image.Image]]:
         base = image.convert("L")
         variants: List[tuple[str, Image.Image]] = []
-        # Pixel fonts OCR better when scaled with nearest-neighbour first; it
-        # preserves hard edges instead of blurring them. Try high thresholds
-        # early because Pokémon name text is usually bright on a dark nameplate;
-        # this often removes the panel/background and improves reads.
-        for scale in (4,):
-            resized = base.resize((max(1, base.width * scale), max(1, base.height * scale)), Image.Resampling.NEAREST)
-            variants.append((f"nearest_threshold_190_{scale}x", resized.point(lambda p: 255 if p > 190 else 0)))
-            variants.append((f"nearest_threshold_210_{scale}x", resized.point(lambda p: 255 if p > 210 else 0)))
-            variants.append((f"nearest_threshold_150_{scale}x", resized.point(lambda p: 255 if p > 150 else 0)))
-            variants.append((f"nearest_gray_{scale}x", resized))
-            variants.append((f"nearest_inverted_threshold_{scale}x", ImageOps.invert(resized).point(lambda p: 255 if p > 130 else 0)))
         try:
             import numpy as np
             rgb = image.convert("RGB")
             arr = np.array(rgb)
+            light = ((arr[:, :, 0] > 120) & (arr[:, :, 1] > 120) & (arr[:, :, 2] > 120))
+            low_chroma_light = ((arr.mean(axis=2) > 90) & (arr.std(axis=2) < 30))
             bright = ((arr[:, :, 0] > 145) & (arr[:, :, 1] > 145) & (arr[:, :, 2] > 145))
-            mask = Image.fromarray((bright * 255).astype("uint8"))
-            scale = 4
-            variants.insert(0, (f"bright_text_mask_{scale}x", mask.resize((max(1, mask.width * scale), max(1, mask.height * scale)), Image.Resampling.NEAREST)))
+            for name, mask_values, scale in (
+                ("light_text_mask", light, 6),
+                ("textish_mask", light | low_chroma_light, 6),
+                ("bright_text_mask", bright, 4),
+            ):
+                mask = Image.fromarray((mask_values * 255).astype("uint8"))
+                variants.append((f"{name}_{scale}x", mask.resize((max(1, mask.width * scale), max(1, mask.height * scale)), Image.Resampling.NEAREST)))
         except Exception:
             pass
+
+        # Pixel fonts OCR better when scaled with nearest-neighbour first; it
+        # preserves hard edges instead of blurring them. The lower threshold is
+        # useful for gray/outlined fan-game text while still suppressing most
+        # colored HP/menu decoration.
+        scale = 6 if fast else 4
+        resized = base.resize((max(1, base.width * scale), max(1, base.height * scale)), Image.Resampling.NEAREST)
+        variants.append((f"nearest_threshold_120_{scale}x", resized.point(lambda p: 255 if p > 120 else 0)))
+        variants.append((f"nearest_threshold_150_{scale}x", resized.point(lambda p: 255 if p > 150 else 0)))
+        variants.append((f"nearest_gray_{scale}x", resized))
+        if not fast:
+            variants.append((f"nearest_threshold_190_{scale}x", resized.point(lambda p: 255 if p > 190 else 0)))
+            variants.append((f"nearest_threshold_210_{scale}x", resized.point(lambda p: 255 if p > 210 else 0)))
+            variants.append((f"nearest_inverted_threshold_{scale}x", ImageOps.invert(resized).point(lambda p: 255 if p > 130 else 0)))
         return variants
 
     def iter_text_attempts(self, image: Image.Image):
@@ -197,14 +222,16 @@ class OcrEngine:
         # because Pokémon matching happens against the local whitelist later.
         base_config = "--oem 3 -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789.-"
         for crop_name, crop in self.candidate_crops(image):
+            fast_crop = crop_name.startswith("tight") or crop_name.startswith("name_text") or crop_name == "inner_name"
             configs = [("psm7", f"--psm 7 {base_config}")]
-            if crop_name.startswith("name_text") or crop_name == "inner_name":
+            if fast_crop:
+                configs.append(("psm13", f"--psm 13 {base_config}"))
                 configs.append(("psm8", f"--psm 8 {base_config}"))
-            for preset, img in self.preprocess_variants(crop):
+            for preset, img in self.preprocess_variants(crop, fast=fast_crop):
                 for cfg_name, config in configs:
                     full_preset = f"{crop_name}/{preset}/{cfg_name}"
                     try:
-                        text = pytesseract.image_to_string(img, config=config, timeout=OCR_TIMEOUT_SECONDS)
+                        text = pytesseract.image_to_string(img, config=config, timeout=OCR_TEXT_TIMEOUT_SECONDS)
                     except Exception as exc:
                         yield OcrAttempt("", f"{full_preset}:ERROR:{exc}")
                         continue
@@ -239,7 +266,7 @@ class OcrEngine:
                     img,
                     config="--psm 11 --oem 3",
                     output_type=pytesseract.Output.DICT,
-                    timeout=OCR_TIMEOUT_SECONDS,
+                    timeout=OCR_WORD_TIMEOUT_SECONDS,
                 )
             except Exception:
                 continue
