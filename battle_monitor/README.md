@@ -321,3 +321,10 @@ Installer version: 0.19
 - Medium-confidence precise-name reads now require repeat confirmation; high-confidence reads still appear immediately.
 - Added **Save OCR misses**. When enabled, low-confidence crops plus OCR attempts are saved to `battle_monitor/ocr_failures/` so bad reads can become test samples instead of guesswork.
 - Added `battle_monitor/test_ocr_samples.py` for repeatable OCR accuracy checks against saved image samples and an `expected.json` file.
+
+## v32 UI and stale-detection notes
+
+- The left controls panel is scrollable, and the mouse wheel scrolls whichever side of the app the cursor is over.
+- The Select Game Window dialog has its own scrollbar for long window lists.
+- Stale opponent cards clear back to `Idle. Scanning for Pokémon…` after repeated scans with no confident name.
+- Precise Add Name zones are ordered top-to-bottom, then left-to-right, so the upper double-battle name zone is Slot 1 and the lower zone is Slot 2.
