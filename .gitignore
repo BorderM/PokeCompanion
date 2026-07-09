@@ -22,6 +22,7 @@ dist_nuitka_debug_build/
 
 # Local monitor runtime state
 battle_monitor/profiles/
+battle_monitor/ocr_failures/
 battle_monitor/startup.log
 battle_monitor/startup_error.log
 
