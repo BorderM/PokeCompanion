@@ -452,10 +452,30 @@ class BattleMonitorApp:
         self.root.columnconfigure(1, weight=1)
         self.root.rowconfigure(0, weight=1)
 
-        controls = ttk.Frame(self.root, padding=(8, 8, 8, 8), style="App.TFrame", width=CONTROL_PANEL_WIDTH)
-        self.controls_frame = controls
-        controls.grid(row=0, column=0, sticky="nsw")
-        controls.grid_propagate(False)
+        controls_outer = ttk.Frame(self.root, style="App.TFrame", width=CONTROL_PANEL_WIDTH)
+        self.controls_frame = controls_outer
+        controls_outer.grid(row=0, column=0, sticky="nsw")
+        controls_outer.grid_propagate(False)
+        controls_outer.rowconfigure(0, weight=1)
+        controls_outer.columnconfigure(0, weight=1)
+
+        self.controls_canvas = tk.Canvas(
+            controls_outer,
+            bg=PAGE_BG,
+            highlightthickness=0,
+            borderwidth=0,
+            width=CONTROL_PANEL_WIDTH - 16,
+        )
+        self.controls_canvas.grid(row=0, column=0, sticky="nsew")
+        self.controls_scrollbar = ttk.Scrollbar(controls_outer, orient="vertical", command=self.controls_canvas.yview)
+        self.controls_scrollbar.grid(row=0, column=1, sticky="ns")
+        self.controls_canvas.configure(yscrollcommand=self.controls_scrollbar.set)
+
+        controls = ttk.Frame(self.controls_canvas, padding=(8, 8, 8, 8), style="App.TFrame", width=CONTROL_PANEL_WIDTH - 18)
+        self.controls_content_frame = controls
+        self.controls_window = self.controls_canvas.create_window((0, 0), window=controls, anchor="nw")
+        controls.bind("<Configure>", self._on_controls_content_configure)
+        self.controls_canvas.bind("<Configure>", self._on_controls_canvas_configure)
         controls.columnconfigure(0, weight=1)
         controls.columnconfigure(1, weight=1)
 
@@ -606,6 +626,22 @@ class BattleMonitorApp:
         self.info_canvas.bind_all("<MouseWheel>", self._on_mousewheel)
         self.render_idle_message()
 
+    def _on_controls_content_configure(self, _event=None) -> None:
+        self.controls_canvas.configure(scrollregion=self.controls_canvas.bbox("all"))
+
+    def _on_controls_canvas_configure(self, event) -> None:
+        # Keep the inner control frame as wide as the canvas so buttons stretch
+        # cleanly while the vertical scrollbar owns the overflow.
+        self.controls_canvas.itemconfigure(self.controls_window, width=event.width)
+        self.controls_canvas.configure(scrollregion=self.controls_canvas.bbox("all"))
+
+    def _widget_inside(self, widget, parent) -> bool:
+        while widget is not None:
+            if widget == parent:
+                return True
+            widget = getattr(widget, "master", None)
+        return False
+
     def _on_card_container_configure(self, _event=None) -> None:
         self.info_canvas.configure(scrollregion=self.info_canvas.bbox("all"))
 
@@ -656,8 +692,20 @@ class BattleMonitorApp:
             pass
 
     def _on_mousewheel(self, event) -> None:
-        # Windows mousewheel delta is usually +/-120.
-        self.info_canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+        # Windows mousewheel delta is usually +/-120. Route wheel events to the
+        # pane under the cursor; previously every wheel event scrolled only the
+        # right live-information canvas, so overflowing controls were unreachable.
+        steps = int(-1 * (event.delta / 120)) if event.delta else 0
+        if steps == 0:
+            return
+        try:
+            target = self.root.winfo_containing(event.x_root, event.y_root)
+        except Exception:
+            target = None
+        if target is not None and self._widget_inside(target, self.controls_frame):
+            self.controls_canvas.yview_scroll(steps, "units")
+        else:
+            self.info_canvas.yview_scroll(steps, "units")
 
     def clear_cards(self) -> None:
         for widget in self.card_container.winfo_children():
