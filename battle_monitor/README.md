@@ -337,3 +337,8 @@ Installer version: 0.19
 - Replaced the four dock-position radio buttons with a compact dropdown selector.
 - Replaced separate Start and Stop controls with one alternating Start/Stop button.
 - Removed the left-side Status box to free space; live scan state remains visible in the compact top bar and right-side idle/card area.
+
+## v34 spacing cleanup
+
+- Removed `Save OCR misses` from the normal control panel because it is a development/testing option.
+- Moved the Hide/Show Controls button to the top of the right panel so Profiles / OCR can start at the top of the left panel.
