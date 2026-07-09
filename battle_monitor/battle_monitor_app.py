@@ -220,6 +220,16 @@ def profile_filename(name: str) -> str:
     return safe
 
 
+def sorted_name_regions(regions: List[Rect]) -> List[Rect]:
+    """Return precise Add Name regions in stable battle-slot order.
+
+    The UI displays slot 1/2/3 from the region index. Sorting top-to-bottom
+    means a double battle's upper nameplate becomes Slot 1 and the lower
+    nameplate becomes Slot 2 even if the user added them in the opposite order.
+    """
+    return sorted(regions, key=lambda r: (r.y, r.x, r.h, r.w))
+
+
 class ToolTip:
     def __init__(self, widget: tk.Widget, text: str, delay_ms: int = 500, wraplength: int = 280):
         self.widget = widget
@@ -806,8 +816,21 @@ class BattleMonitorApp:
         tk.Label(dialog, text="Select a running emulator/game window", bg=PAGE_BG, fg=WHITE, font=("Segoe UI", 11, "bold")).pack(anchor="w", padx=12, pady=(12, 6))
         tk.Label(dialog, text="This uses the full outer window bounds, including title/menu bars.", bg=PAGE_BG, fg=MUTED, font=("Segoe UI", 8)).pack(anchor="w", padx=12, pady=(0, 6))
 
-        listbox = tk.Listbox(dialog, bg=CARD_BG, fg=TEXT, selectbackground=BLUE, activestyle="none")
-        listbox.pack(fill="both", expand=True, padx=12, pady=6)
+        list_frame = tk.Frame(dialog, bg=PAGE_BG)
+        list_frame.pack(fill="both", expand=True, padx=12, pady=6)
+        list_frame.rowconfigure(0, weight=1)
+        list_frame.columnconfigure(0, weight=1)
+        listbox = tk.Listbox(list_frame, bg=CARD_BG, fg=TEXT, selectbackground=BLUE, activestyle="none")
+        listbox.grid(row=0, column=0, sticky="nsew")
+        list_scrollbar = ttk.Scrollbar(list_frame, orient="vertical", command=listbox.yview)
+        list_scrollbar.grid(row=0, column=1, sticky="ns")
+        listbox.configure(yscrollcommand=list_scrollbar.set)
+        def scroll_window_list(event):
+            steps = int(-1 * (event.delta / 120)) if event.delta else 0
+            if steps:
+                listbox.yview_scroll(steps, "units")
+            return "break"
+        listbox.bind("<MouseWheel>", scroll_window_list)
         for w in windows:
             r = w["rect"]
             listbox.insert("end", f"{w['title']}   [{r.w}×{r.h} at {r.x},{r.y}]")
@@ -1183,13 +1206,15 @@ class BattleMonitorApp:
         if len(self.name_regions) == 1 and self.name_regions[0] == auto:
             self.name_regions = []
         self.name_regions.append(rel)
+        self.name_regions = sorted_name_regions(self.name_regions)
+        slot_number = self.name_regions.index(rel) + 1
         if self.name_scan_area:
             self.status_var.set(
-                f"Added name region {len(self.name_regions)}/{MAX_NAME_REGIONS}: {rel.w}×{rel.h} at +{rel.x},+{rel.y}. "
+                f"Added name region as Slot {slot_number}/{MAX_NAME_REGIONS}: {rel.w}×{rel.h} at +{rel.x},+{rel.y}. "
                 "Name Area will confirm whether that slot is visible."
             )
         else:
-            self.status_var.set(f"Added name region {len(self.name_regions)}/{MAX_NAME_REGIONS}: {rel.w}×{rel.h} at +{rel.x},+{rel.y}.")
+            self.status_var.set(f"Added name region as Slot {slot_number}/{MAX_NAME_REGIONS}: {rel.w}×{rel.h} at +{rel.x},+{rel.y}.")
         self.current_keys.clear()
         self.slot_form_overrides.clear()
         self.scan_histories.clear()
@@ -1274,7 +1299,7 @@ class BattleMonitorApp:
         top-left battle area so first-time setup can start from Window Region.
         """
         if self.name_regions:
-            return [Rect(r.x, r.y, r.w, r.h) for r in self.name_regions]
+            return sorted_name_regions([Rect(r.x, r.y, r.w, r.h) for r in self.name_regions])
         return self.derive_regions_from_name_area()
 
     def has_tracking_regions(self) -> bool:
@@ -1301,7 +1326,7 @@ class BattleMonitorApp:
             if rel:
                 draw.rectangle([rel.x, rel.y, rel.x + rel.w, rel.y + rel.h], outline="cyan", width=2)
                 draw.text((rel.x + 4, rel.y + 4), "Auto Nameplates", fill="cyan")
-        for i, rel in enumerate(self.name_regions, start=1):
+        for i, rel in enumerate(sorted_name_regions(self.name_regions), start=1):
             draw.rectangle([rel.x, rel.y, rel.x + rel.w, rel.y + rel.h], outline="red", width=3)
             draw.text((rel.x + 4, rel.y + 4), f"Name {i}", fill="red")
         if self.name_regions and self.name_scan_area:
@@ -2569,6 +2594,24 @@ class BattleMonitorApp:
 
         self.scan_result_queue.put((scan_tick, results, worker_error))
 
+    def mark_slot_miss(self, slot_idx: int) -> bool:
+        """Count one scan without a confirmed Pokémon for a slot.
+
+        Returns True when a stale card was cleared. Capture errors, no OCR text,
+        and low-confidence OCR all need to age out old detections; otherwise the
+        UI can stay stuck on the last opponent indefinitely.
+        """
+        self.slot_miss_counts[slot_idx] = self.slot_miss_counts.get(slot_idx, 0) + 1
+        if self.slot_miss_counts[slot_idx] < LOW_CONFIDENCE_CLEAR_SCANS:
+            return False
+        cleared = slot_idx in self.current_keys
+        self.current_keys.pop(slot_idx, None)
+        self.slot_form_overrides.pop(slot_idx, None)
+        self.last_slot_attempt_texts.pop(slot_idx, None)
+        self.last_slot_raw_texts.pop(slot_idx, None)
+        self.ocr_stabilizer.clear_slot(slot_idx)
+        return cleared
+
     def finish_scan(self, scan_tick: int, results: list, worker_error: Optional[str]) -> None:
         # Ignore late results from abandoned workers. This is important after
         # Stop/Start or after the watchdog retries a hung OCR call.
@@ -2603,6 +2646,7 @@ class BattleMonitorApp:
             idx = result.get("idx", 0)
             seen_result_slots.add(idx)
             if result.get("capture_error"):
+                self.mark_slot_miss(idx)
                 debug_lines.append(f"Slot {idx + 1}: capture error: {result['capture_error']}")
                 continue
 
@@ -2667,11 +2711,8 @@ class BattleMonitorApp:
                     self.slot_miss_counts[idx] = 0
                     debug_lines.append(f"Slot {idx + 1}: waiting for repeat confirmation from {source}. {debug_text}")
                 else:
-                    self.slot_miss_counts[idx] = self.slot_miss_counts.get(idx, 0) + 1
+                    self.mark_slot_miss(idx)
                     self.auto_slot_pending.pop(idx, None)
-                    if self.slot_miss_counts[idx] >= LOW_CONFIDENCE_CLEAR_SCANS and idx in self.current_keys:
-                        self.current_keys.pop(idx, None)
-                        self.slot_form_overrides.pop(idx, None)
                     debug_lines.append(f"Slot {idx + 1}: waiting / no confident match from {source}. {debug_text}")
                     debug_image = result.get("debug_image")
                     if debug_image is not None:
@@ -2690,13 +2731,8 @@ class BattleMonitorApp:
         # detected nameplate.
         for stale_idx in list(self.current_keys.keys()):
             if stale_idx not in seen_result_slots:
-                self.slot_miss_counts[stale_idx] = self.slot_miss_counts.get(stale_idx, 0) + 1
                 self.auto_slot_pending.pop(stale_idx, None)
-                if self.slot_miss_counts[stale_idx] >= LOW_CONFIDENCE_CLEAR_SCANS:
-                    self.current_keys.pop(stale_idx, None)
-                    self.slot_form_overrides.pop(stale_idx, None)
-                    self.last_slot_attempt_texts.pop(stale_idx, None)
-                    self.last_slot_raw_texts.pop(stale_idx, None)
+                self.mark_slot_miss(stale_idx)
 
         # Last-chance UI-side direct resolver: if any OCR string visibly
         # contains a Pokémon name, render the card even if the worker did not
@@ -2800,8 +2836,8 @@ class BattleMonitorApp:
 
         has_setup = self.has_tracking_regions()
         if self.running and has_setup:
-            title = "Waiting for Pokémon…"
-            subtitle = "No confident name is visible in the selected name region yet. The card will appear as soon as a Pokémon name is read."
+            title = "Idle. Scanning for Pokémon…"
+            subtitle = "No confident opponent name is visible right now. The card will reappear as soon as OCR confidently reads a Pokémon name."
         elif has_setup:
             title = "Ready. Click Start to begin tracking."
             subtitle = "Game region and name region are set. Use Show Preview only if you need to tune the crop."
@@ -3777,7 +3813,7 @@ class BattleMonitorApp:
     def profile_payload(self) -> dict:
         return {
             "game_region": self.game_region.to_dict() if self.game_region else None,
-            "name_regions": [r.to_dict() for r in self.name_regions],
+            "name_regions": [r.to_dict() for r in sorted_name_regions(self.name_regions)],
             "name_scan_area": self.name_scan_area.to_dict() if self.name_scan_area else None,
             "threshold": int(float(self.threshold_var.get())),
             "preview_visible": bool(self.preview_visible.get()),
@@ -3794,7 +3830,7 @@ class BattleMonitorApp:
     def apply_profile_payload(self, payload: dict) -> None:
         game = payload.get("game_region")
         self.game_region = Rect.from_dict(game) if game else None
-        self.name_regions = [Rect.from_dict(r) for r in payload.get("name_regions", [])]
+        self.name_regions = sorted_name_regions([Rect.from_dict(r) for r in payload.get("name_regions", [])])
         area = payload.get("name_scan_area")
         self.name_scan_area = Rect.from_dict(area) if area else None
         if payload.get("threshold"):
