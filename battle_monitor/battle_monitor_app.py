@@ -1346,9 +1346,15 @@ class BattleMonitorApp:
         self.last_rendered_keys = tuple()
         self.render_detected(self.last_debug_lines, preserve_scroll=True, force=True)
         if not self.controls_visible.get() and self.root.winfo_width() > 360:
-            width = ULTRA_DOCK_WIDTH if self.ultra_compact.get() else DOCK_WIDTH
-            self.root.geometry(f"{width}x{max(DOCK_MIN_HEIGHT, self.root.winfo_height())}")
-            self.reset_info_canvas_width()
+            if self.game_region and not self.docking_in_progress:
+                # The compact toggle changes the docked window width. Re-run the
+                # full docking calculation so the edge stays flush with the game
+                # instead of resizing in place and overlapping the emulator.
+                self.dock_to_game_region(self.last_docked_position or self.dock_position.get())
+            else:
+                width = ULTRA_DOCK_WIDTH if self.ultra_compact.get() else DOCK_WIDTH
+                self.root.geometry(f"{width}x{max(DOCK_MIN_HEIGHT, self.root.winfo_height())}")
+                self.reset_info_canvas_width()
 
     def own_visible_window_rect(self) -> Optional[Rect]:
         """Return the monitor's actual outer visible bounds on Windows."""

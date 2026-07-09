@@ -33,6 +33,8 @@ def test_topbar_has_compact_toggle_and_expanded_setup_may_overlap_game():
     assert "self.topbar_compact_check" in source
     assert "text=\"Compact\"" in source
     assert "setup view may overlap the game" in source
+    assert "self.dock_to_game_region(self.last_docked_position or self.dock_position.get())" in source
+    assert "instead of resizing in place and overlapping the emulator" in source
 
 
 def test_mark_slot_miss_clears_stale_detected_card_after_threshold():
