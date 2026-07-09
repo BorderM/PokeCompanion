@@ -28,6 +28,13 @@ def test_control_panel_width_fits_two_column_setup_button_labels():
     assert CONTROL_PANEL_WIDTH >= 320
 
 
+def test_topbar_has_compact_toggle_and_expanded_setup_may_overlap_game():
+    source = (BATTLE_MONITOR_DIR / "battle_monitor_app.py").read_text(encoding="utf-8")
+    assert "self.topbar_compact_check" in source
+    assert "text=\"Compact\"" in source
+    assert "setup view may overlap the game" in source
+
+
 def test_mark_slot_miss_clears_stale_detected_card_after_threshold():
     app = BattleMonitorApp.__new__(BattleMonitorApp)
     app.slot_miss_counts = {}
