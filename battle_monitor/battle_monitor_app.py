@@ -140,7 +140,7 @@ LOW_CONFIDENCE_CLEAR_SCANS = 2
 MAX_NAME_REGIONS = 3
 AUTO_TOP_LEFT_SCAN_WIDTH_RATIO = 0.66
 AUTO_TOP_LEFT_SCAN_HEIGHT_RATIO = 0.54
-CONTROL_PANEL_WIDTH = 260
+CONTROL_PANEL_WIDTH = 320
 CONTROL_STATUS_WRAP = CONTROL_PANEL_WIDTH - 34
 DOCK_WIDTH = 500
 ULTRA_DOCK_WIDTH = 460
@@ -608,14 +608,44 @@ class BattleMonitorApp:
         self.info_canvas.bind_all("<MouseWheel>", self._on_mousewheel)
         self.render_idle_message()
 
+    def _update_canvas_scrollregion(self, canvas: tk.Canvas, tolerance: int = 8) -> bool:
+        """Update a canvas scrollregion and clamp it when content fits.
+
+        Tk canvases can report a slightly taller bbox because of padding/borders,
+        which lets users scroll a few empty pixels. Treat tiny overflows as no
+        overflow so idle/short panels stay anchored at the top.
+        """
+        bbox = canvas.bbox("all")
+        width = max(1, canvas.winfo_width())
+        height = max(1, canvas.winfo_height())
+        if not bbox:
+            canvas.configure(scrollregion=(0, 0, width, height))
+            canvas.yview_moveto(0)
+            return False
+        x1, y1, x2, y2 = bbox
+        content_height = max(0, y2 - y1)
+        content_width = max(width, x2 - x1)
+        if content_height <= height + tolerance:
+            canvas.configure(scrollregion=(0, 0, content_width, height))
+            canvas.yview_moveto(0)
+            return False
+        canvas.configure(scrollregion=bbox)
+        return True
+
+    def _canvas_can_scroll(self, canvas: tk.Canvas, tolerance: int = 8) -> bool:
+        bbox = canvas.bbox("all")
+        if not bbox:
+            return False
+        return (bbox[3] - bbox[1]) > max(1, canvas.winfo_height()) + tolerance
+
     def _on_controls_content_configure(self, _event=None) -> None:
-        self.controls_canvas.configure(scrollregion=self.controls_canvas.bbox("all"))
+        self._update_canvas_scrollregion(self.controls_canvas)
 
     def _on_controls_canvas_configure(self, event) -> None:
         # Keep the inner control frame as wide as the canvas so buttons stretch
-        # cleanly while the vertical scrollbar owns the overflow.
+        # cleanly while the vertical scrollbar owns true overflow.
         self.controls_canvas.itemconfigure(self.controls_window, width=event.width)
-        self.controls_canvas.configure(scrollregion=self.controls_canvas.bbox("all"))
+        self._update_canvas_scrollregion(self.controls_canvas)
 
     def _widget_inside(self, widget, parent) -> bool:
         while widget is not None:
@@ -625,7 +655,7 @@ class BattleMonitorApp:
         return False
 
     def _on_card_container_configure(self, _event=None) -> None:
-        self.info_canvas.configure(scrollregion=self.info_canvas.bbox("all"))
+        self._update_canvas_scrollregion(self.info_canvas)
 
     def info_layout_bucket(self, width: int) -> tuple:
         width = max(1, int(width))
@@ -640,6 +670,7 @@ class BattleMonitorApp:
 
     def _on_info_canvas_configure(self, event) -> None:
         self.info_canvas.itemconfigure(self.card_window, width=event.width)
+        self._update_canvas_scrollregion(self.info_canvas)
         bucket = self.info_layout_bucket(event.width)
         if bucket != self.last_card_width_bucket:
             self.last_card_width_bucket = bucket
@@ -669,7 +700,7 @@ class BattleMonitorApp:
             self.root.update_idletasks()
             width = max(1, self.info_canvas.winfo_width())
             self.info_canvas.itemconfigure(self.card_window, width=width)
-            self.info_canvas.configure(scrollregion=self.info_canvas.bbox("all"))
+            self._update_canvas_scrollregion(self.info_canvas)
         except Exception:
             pass
 
@@ -685,9 +716,11 @@ class BattleMonitorApp:
         except Exception:
             target = None
         if target is not None and self._widget_inside(target, self.controls_frame):
-            self.controls_canvas.yview_scroll(steps, "units")
+            if self._canvas_can_scroll(self.controls_canvas):
+                self.controls_canvas.yview_scroll(steps, "units")
         else:
-            self.info_canvas.yview_scroll(steps, "units")
+            if self._canvas_can_scroll(self.info_canvas):
+                self.info_canvas.yview_scroll(steps, "units")
 
     def clear_cards(self) -> None:
         for widget in self.card_container.winfo_children():
@@ -2928,8 +2961,8 @@ class BattleMonitorApp:
             self.last_debug_signature = tuple(debug_lines)
             self.last_debug_render_time = time.monotonic()
         self.card_container.update_idletasks()
-        self.info_canvas.configure(scrollregion=self.info_canvas.bbox("all"))
-        if preserve_scroll:
+        can_scroll = self._update_canvas_scrollregion(self.info_canvas)
+        if preserve_scroll and can_scroll:
             self.info_canvas.yview_moveto(scroll_pos)
         else:
             self.info_canvas.yview_moveto(0)

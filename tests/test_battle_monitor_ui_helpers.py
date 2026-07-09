@@ -9,7 +9,7 @@ for path in (PROJECT_ROOT, BATTLE_MONITOR_DIR):
     if str(path) not in sys.path:
         sys.path.insert(0, str(path))
 
-from battle_monitor_app import BattleMonitorApp, LOW_CONFIDENCE_CLEAR_SCANS, sorted_name_regions
+from battle_monitor_app import BattleMonitorApp, CONTROL_PANEL_WIDTH, LOW_CONFIDENCE_CLEAR_SCANS, sorted_name_regions
 from ocr_quality import TemporalMatchStabilizer
 from region_selector import Rect
 
@@ -20,6 +20,12 @@ def test_sorted_name_regions_orders_double_battle_slots_top_to_bottom():
     same_row_left = Rect(10, 80, 120, 24)
 
     assert sorted_name_regions([lower, upper, same_row_left]) == [same_row_left, upper, lower]
+
+
+def test_control_panel_width_fits_two_column_setup_button_labels():
+    # At the current ttk padding/panel gutters, 320 px gives the half-width
+    # buttons enough room for labels such as "Window Region" and "Guided Setup".
+    assert CONTROL_PANEL_WIDTH >= 320
 
 
 def test_mark_slot_miss_clears_stale_detected_card_after_threshold():

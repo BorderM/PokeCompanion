@@ -342,3 +342,9 @@ Installer version: 0.19
 
 - Removed `Save OCR misses` from the normal control panel because it is a development/testing option.
 - Moved the Hide/Show Controls button to the top of the right panel so Profiles / OCR can start at the top of the left panel.
+
+## v35 button fit and scroll clamp
+
+- Widened the left control panel so two-column buttons fit labels such as `Window Region`, `Game Region`, and `Guided Setup` without clipping.
+- Clamped the left and right canvas scroll regions so mouse-wheel scrolling does nothing when the visible content already fits.
+- Short idle/card content now stays anchored instead of scrolling into empty space.
