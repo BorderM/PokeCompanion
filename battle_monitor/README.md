@@ -354,3 +354,7 @@ Installer version: 0.19
 - Expanded controls mode now uses the normal setup width even if that overlaps the selected game window; hiding controls docks back beside the game as before.
 - Added a right-panel `Compact` checkbox in the top bar so compact card mode can be toggled without opening the left controls.
 - Current OCR capture is screen-coordinate based: it reads pixels from the selected region on the desktop. If another window covers the emulator, those covered pixels can affect OCR. True occlusion-proof per-window capture would require a separate Windows capture backend and may not work for every hardware-accelerated emulator/game.
+
+## v37 compact toggle redocking
+
+- Toggling `Compact` while controls are hidden now re-runs docking instead of resizing in place, keeping the companion flush beside the selected game window instead of overlapping the emulator.
