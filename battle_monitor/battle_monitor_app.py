@@ -353,7 +353,7 @@ class BattleMonitorApp:
         self.preview_visible = tk.BooleanVar(value=False)
         self.preview_button_text = tk.StringVar(value="Show Preview")
         self.controls_visible = tk.BooleanVar(value=True)
-        self.controls_button_text = tk.StringVar(value="Hide Controls")
+        self.controls_button_text = tk.StringVar(value="Hide")
         self.tracking_button_text = tk.StringVar(value="Start")
         self.dock_on_start = tk.BooleanVar(value=True)
         self.dock_position = tk.StringVar(value="left")
@@ -491,14 +491,7 @@ class BattleMonitorApp:
         controls.columnconfigure(0, weight=1)
         controls.columnconfigure(1, weight=1)
 
-        header = ttk.Frame(controls, style="App.TFrame")
-        header.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 6))
-        header.columnconfigure(0, weight=1)
-        self.hide_controls_button = ttk.Button(header, text="Hide", width=8, command=self.toggle_controls_panel)
-        self.hide_controls_button.grid(row=0, column=1, sticky="e")
-        self.add_tooltip(self.hide_controls_button, "Hide the setup controls and return to the docked companion view.")
-
-        row = 1
+        row = 0
         profiles = ttk.LabelFrame(controls, text="Profiles / OCR", style="Section.TLabelframe", padding=6)
         profiles.grid(row=row, column=0, columnspan=2, sticky="ew", pady=(0, 6))
         profiles.columnconfigure(0, weight=1)
@@ -512,9 +505,6 @@ class BattleMonitorApp:
         self.add_ocr_fix_button = ttk.Button(profiles, text="Add OCR Fix", command=self.add_ocr_fix_dialog)
         self.add_ocr_fix_button.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(5, 2))
         self.add_tooltip(self.add_ocr_fix_button, "Teach the matcher that a recurring bad OCR read means a specific Pokemon.")
-        self.save_ocr_failures_check = ttk.Checkbutton(profiles, text="Save OCR misses", variable=self.save_ocr_failures, command=self.on_save_ocr_failures_changed)
-        self.save_ocr_failures_check.grid(row=2, column=0, columnspan=2, sticky="w", pady=(3, 0))
-        self.add_tooltip(self.save_ocr_failures_check, "Save low-confidence name crops and OCR attempts to battle_monitor/ocr_failures for later accuracy tests.")
 
         row += 1
         capture = ttk.LabelFrame(controls, text="Setup", style="Section.TLabelframe", padding=6)
@@ -582,9 +572,6 @@ class BattleMonitorApp:
 
         self.compact_topbar = ttk.Frame(main, style="App.TFrame")
         self.compact_topbar.grid(row=0, column=0, sticky="ew", pady=(0, 4))
-        self.show_controls_button = ttk.Button(self.compact_topbar, textvariable=self.controls_button_text, command=self.toggle_controls_panel)
-        self.show_controls_button.pack(side="left")
-        self.add_tooltip(self.show_controls_button, "Show the setup controls; hiding them again returns to the docked position.")
         tk.Label(
             self.compact_topbar,
             textvariable=self.scan_status_var,
@@ -592,8 +579,10 @@ class BattleMonitorApp:
             fg=MUTED,
             font=("Segoe UI", 8),
             anchor="w",
-        ).pack(side="left", padx=(8, 0), fill="x", expand=True)
-        self.compact_topbar.grid_remove()
+        ).pack(side="left", fill="x", expand=True)
+        self.show_controls_button = ttk.Button(self.compact_topbar, textvariable=self.controls_button_text, width=12, command=self.toggle_controls_panel)
+        self.show_controls_button.pack(side="right")
+        self.add_tooltip(self.show_controls_button, "Hide or show the setup controls.")
 
         self.preview_box = ttk.LabelFrame(main, text="Region preview", style="Section.TLabelframe", padding=6)
         self.preview_box.grid(row=1, column=0, sticky="ew", pady=(0, 6))
@@ -949,7 +938,6 @@ class BattleMonitorApp:
             self.controls_frame.grid_remove()
             self.controls_visible.set(False)
             self.controls_button_text.set("Show Controls")
-            self.compact_topbar.grid()
             self.root.minsize(DOCK_MIN_WIDTH, DOCK_MIN_HEIGHT)
             if self.game_region and not self.docking_in_progress:
                 self.dock_to_game_region(self.last_docked_position or self.dock_position.get())
@@ -962,8 +950,7 @@ class BattleMonitorApp:
         else:
             self.controls_frame.grid()
             self.controls_visible.set(True)
-            self.controls_button_text.set("Hide Controls")
-            self.compact_topbar.grid_remove()
+            self.controls_button_text.set("Hide")
             self.root.minsize(EXPANDED_CONTROLS_MIN_WIDTH, 400)
             self.position_expanded_controls_window()
             self.reset_info_canvas_width()
@@ -1467,7 +1454,7 @@ class BattleMonitorApp:
         be placed over the selected game region.
         """
         if self.window_match_text:
-            # Manual docking, Hide Controls -> dock, and Dock Now should all use
+            # Manual docking, hiding controls, and Dock Now should all use
             # the latest attached-window rectangle. Follow mode already refreshes
             # on a timer, but relying on the next timer tick can leave a visible
             # gap until the emulator is moved again.
