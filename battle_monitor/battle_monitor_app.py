@@ -354,6 +354,7 @@ class BattleMonitorApp:
         self.preview_button_text = tk.StringVar(value="Show Preview")
         self.controls_visible = tk.BooleanVar(value=True)
         self.controls_button_text = tk.StringVar(value="Hide Controls")
+        self.tracking_button_text = tk.StringVar(value="Start")
         self.dock_on_start = tk.BooleanVar(value=True)
         self.dock_position = tk.StringVar(value="left")
         self.ultra_compact = tk.BooleanVar(value=False)
@@ -400,6 +401,7 @@ class BattleMonitorApp:
         style.map("TCheckbutton", background=[("active", PAGE_BG)], foreground=[("active", WHITE)])
         style.configure("TRadiobutton", background=PAGE_BG, foreground=TEXT, font=("Segoe UI", 9))
         style.map("TRadiobutton", background=[("active", PAGE_BG)], foreground=[("active", WHITE)])
+        style.configure("TCombobox", font=("Segoe UI", 9), padding=(4, 2))
         style.configure("TScale", background=PAGE_BG)
 
     def add_tooltip(self, widget: tk.Widget, text: str) -> None:
@@ -492,49 +494,60 @@ class BattleMonitorApp:
         header = ttk.Frame(controls, style="App.TFrame")
         header.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 6))
         header.columnconfigure(0, weight=1)
-        ttk.Label(header, text="Battle Monitor", style="Title.TLabel").grid(row=0, column=0, sticky="w")
         self.hide_controls_button = ttk.Button(header, text="Hide", width=8, command=self.toggle_controls_panel)
-        self.hide_controls_button.grid(row=0, column=1, sticky="e", padx=(8, 0))
+        self.hide_controls_button.grid(row=0, column=1, sticky="e")
         self.add_tooltip(self.hide_controls_button, "Hide the setup controls and return to the docked companion view.")
 
         row = 1
+        profiles = ttk.LabelFrame(controls, text="Profiles / OCR", style="Section.TLabelframe", padding=6)
+        profiles.grid(row=row, column=0, columnspan=2, sticky="ew", pady=(0, 6))
+        profiles.columnconfigure(0, weight=1)
+        profiles.columnconfigure(1, weight=1)
+        self.load_profile_button = ttk.Button(profiles, text="Load", command=self.load_profile_dialog)
+        self.load_profile_button.grid(row=0, column=0, sticky="ew", padx=(0, 2), pady=2)
+        self.add_tooltip(self.load_profile_button, "Load a saved monitor setup from the profiles folder.")
+        self.save_profile_button = ttk.Button(profiles, text="Save", command=self.save_profile_dialog)
+        self.save_profile_button.grid(row=0, column=1, sticky="ew", padx=(2, 0), pady=2)
+        self.add_tooltip(self.save_profile_button, "Save the current regions, dock settings, and compact mode.")
+        self.add_ocr_fix_button = ttk.Button(profiles, text="Add OCR Fix", command=self.add_ocr_fix_dialog)
+        self.add_ocr_fix_button.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(5, 2))
+        self.add_tooltip(self.add_ocr_fix_button, "Teach the matcher that a recurring bad OCR read means a specific Pokemon.")
+        self.save_ocr_failures_check = ttk.Checkbutton(profiles, text="Save OCR misses", variable=self.save_ocr_failures, command=self.on_save_ocr_failures_changed)
+        self.save_ocr_failures_check.grid(row=2, column=0, columnspan=2, sticky="w", pady=(3, 0))
+        self.add_tooltip(self.save_ocr_failures_check, "Save low-confidence name crops and OCR attempts to battle_monitor/ocr_failures for later accuracy tests.")
+
+        row += 1
         capture = ttk.LabelFrame(controls, text="Setup", style="Section.TLabelframe", padding=6)
         capture.grid(row=row, column=0, columnspan=2, sticky="ew", pady=(0, 6))
         capture.columnconfigure(0, weight=1)
         capture.columnconfigure(1, weight=1)
-        self.game_region_button = ttk.Button(capture, text="Game Region", command=self.select_game_region)
-        self.game_region_button.grid(row=0, column=0, sticky="ew", padx=(0, 2), pady=2)
-        self.add_tooltip(self.game_region_button, "Manually drag around the full emulator or game window.")
         self.window_region_button = ttk.Button(capture, text="Window Region", command=self.select_game_window_region)
-        self.window_region_button.grid(row=0, column=1, sticky="ew", padx=(2, 0), pady=2)
+        self.window_region_button.grid(row=0, column=0, sticky="ew", padx=(0, 2), pady=2)
         self.add_tooltip(self.window_region_button, "Choose a running emulator/game window and use its current bounds.")
+        self.game_region_button = ttk.Button(capture, text="Game Region", command=self.select_game_region)
+        self.game_region_button.grid(row=0, column=1, sticky="ew", padx=(2, 0), pady=2)
+        self.add_tooltip(self.game_region_button, "Manually drag around the full emulator or game window.")
         self.add_name_button = ttk.Button(capture, text="Add Name", command=self.add_name_region)
         self.add_name_button.grid(row=1, column=0, sticky="ew", padx=(0, 2), pady=2)
-        self.add_tooltip(self.add_name_button, "Optional: add a tight OCR crop around one enemy name if auto detection struggles.")
+        self.add_tooltip(self.add_name_button, "Recommended: add a tight OCR crop around each opponent name.")
         self.clear_names_button = ttk.Button(capture, text="Clear Names", command=self.clear_name_regions)
         self.clear_names_button.grid(row=1, column=1, sticky="ew", padx=(2, 0), pady=2)
         self.add_tooltip(self.clear_names_button, "Remove all precise name crops and reset current detections.")
-        self.name_area_button = ttk.Button(capture, text="Name Area", command=self.select_name_scan_area)
-        self.name_area_button.grid(row=2, column=0, sticky="ew", padx=(0, 2), pady=2)
-        self.add_tooltip(self.name_area_button, "Optional: select a broad nameplate area if the automatic top-left scan needs guidance.")
         self.preview_toggle_button = ttk.Button(capture, textvariable=self.preview_button_text, command=self.toggle_preview)
-        self.preview_toggle_button.grid(row=2, column=1, sticky="ew", padx=(2, 0), pady=2)
+        self.preview_toggle_button.grid(row=2, column=0, sticky="ew", padx=(0, 2), pady=2)
         self.add_tooltip(self.preview_toggle_button, "Show or hide a preview of the selected game region and OCR boxes.")
         self.guided_setup_button = ttk.Button(capture, text="Guided Setup", command=self.start_setup_tour)
-        self.guided_setup_button.grid(row=3, column=0, columnspan=2, sticky="ew", pady=(5, 2))
-        self.add_tooltip(self.guided_setup_button, "Walk through window selection, name areas, docking, profiles, and tracking.")
+        self.guided_setup_button.grid(row=2, column=1, sticky="ew", padx=(2, 0), pady=2)
+        self.add_tooltip(self.guided_setup_button, "Walk through window selection, tight name zones, docking, profiles, and tracking.")
 
         row += 1
         tracking = ttk.LabelFrame(controls, text="Live", style="Section.TLabelframe", padding=6)
         tracking.grid(row=row, column=0, columnspan=2, sticky="ew", pady=(0, 6))
         tracking.columnconfigure(0, weight=1)
         tracking.columnconfigure(1, weight=1)
-        self.start_button = ttk.Button(tracking, text="Start", command=self.start_tracking)
-        self.start_button.grid(row=0, column=0, sticky="ew", padx=(0, 2), pady=2)
-        self.add_tooltip(self.start_button, "Begin OCR scanning. With no name crops, the app scans the top-left battle area automatically.")
-        self.stop_button = ttk.Button(tracking, text="Stop", command=self.stop_tracking)
-        self.stop_button.grid(row=0, column=1, sticky="ew", padx=(2, 0), pady=2)
-        self.add_tooltip(self.stop_button, "Stop scanning and ignore any late OCR results from in-flight scans.")
+        self.tracking_button = ttk.Button(tracking, textvariable=self.tracking_button_text, command=self.toggle_tracking)
+        self.tracking_button.grid(row=0, column=0, columnspan=2, sticky="ew", pady=2)
+        self.add_tooltip(self.tracking_button, "Start or stop OCR scanning. With no name crops, the app scans the top-left battle area automatically.")
         self.dock_on_start_check = ttk.Checkbutton(tracking, text="Dock on Start", variable=self.dock_on_start)
         self.dock_on_start_check.grid(row=1, column=0, columnspan=2, sticky="w", pady=(4, 0))
         self.add_tooltip(self.dock_on_start_check, "Automatically hide controls and dock beside the game when tracking starts.")
@@ -544,50 +557,20 @@ class BattleMonitorApp:
         self.auto_window_region_check = ttk.Checkbutton(tracking, text="Follow window", variable=self.auto_window_region)
         self.auto_window_region_check.grid(row=3, column=0, columnspan=2, sticky="w", pady=(2, 0))
         self.add_tooltip(self.auto_window_region_check, "Keep the captured game bounds and docked monitor attached to the selected window as it moves.")
-        ttk.Label(tracking, text="Dock position", style="App.TLabel").grid(row=4, column=0, columnspan=2, sticky="w", pady=(7, 1))
-        self.dock_select_frame = ttk.Frame(tracking, style="App.TFrame")
-        dock_select = self.dock_select_frame
-        dock_select.grid(row=5, column=0, columnspan=2, sticky="ew", pady=(0, 2))
-        for c in range(2):
-            dock_select.columnconfigure(c, weight=1)
-        self.dock_left_radio = ttk.Radiobutton(dock_select, text="Left", value="left", variable=self.dock_position)
-        self.dock_left_radio.grid(row=0, column=0, sticky="w", padx=(0, 6), pady=1)
-        self.dock_right_radio = ttk.Radiobutton(dock_select, text="Right", value="right", variable=self.dock_position)
-        self.dock_right_radio.grid(row=0, column=1, sticky="w", pady=1)
-        self.dock_above_radio = ttk.Radiobutton(dock_select, text="Above", value="above", variable=self.dock_position)
-        self.dock_above_radio.grid(row=1, column=0, sticky="w", padx=(0, 6), pady=1)
-        self.dock_below_radio = ttk.Radiobutton(dock_select, text="Below", value="below", variable=self.dock_position)
-        self.dock_below_radio.grid(row=1, column=1, sticky="w", pady=1)
-        self.add_tooltip(self.dock_left_radio, "Dock the companion on the left side of the selected game region.")
-        self.add_tooltip(self.dock_right_radio, "Dock the companion on the right side of the selected game region.")
-        self.add_tooltip(self.dock_above_radio, "Dock the companion above the selected game region.")
-        self.add_tooltip(self.dock_below_radio, "Dock the companion below the selected game region.")
+        ttk.Label(tracking, text="Dock position", style="App.TLabel").grid(row=4, column=0, sticky="w", pady=(7, 1))
+        self.dock_position_dropdown = ttk.Combobox(
+            tracking,
+            textvariable=self.dock_position,
+            values=("left", "right", "above", "below"),
+            state="readonly",
+            width=10,
+        )
+        self.dock_position_dropdown.grid(row=4, column=1, sticky="ew", padx=(6, 0), pady=(7, 1))
+        self.add_tooltip(self.dock_position_dropdown, "Choose where the companion docks relative to the selected game region.")
         self.dock_now_button = ttk.Button(tracking, text="Dock Now", command=lambda: self.dock_to_game_region(self.dock_position.get()))
-        self.dock_now_button.grid(row=6, column=0, columnspan=2, sticky="ew", pady=(5, 2))
+        self.dock_now_button.grid(row=5, column=0, columnspan=2, sticky="ew", pady=(5, 2))
         self.add_tooltip(self.dock_now_button, "Immediately move and resize the monitor to the selected dock position.")
 
-        row += 1
-        profiles = ttk.LabelFrame(controls, text="Profiles / OCR", style="Section.TLabelframe", padding=6)
-        profiles.grid(row=row, column=0, columnspan=2, sticky="ew", pady=(0, 6))
-        profiles.columnconfigure(0, weight=1)
-        profiles.columnconfigure(1, weight=1)
-        self.save_profile_button = ttk.Button(profiles, text="Save", command=self.save_profile_dialog)
-        self.save_profile_button.grid(row=0, column=0, sticky="ew", padx=(0, 2), pady=2)
-        self.add_tooltip(self.save_profile_button, "Save the current regions, dock settings, compact mode, and collapsed sections.")
-        self.load_profile_button = ttk.Button(profiles, text="Load", command=self.load_profile_dialog)
-        self.load_profile_button.grid(row=0, column=1, sticky="ew", padx=(2, 0), pady=2)
-        self.add_tooltip(self.load_profile_button, "Load a saved monitor setup from the profiles folder.")
-        self.add_ocr_fix_button = ttk.Button(profiles, text="Add OCR Fix", command=self.add_ocr_fix_dialog)
-        self.add_ocr_fix_button.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(5, 2))
-        self.add_tooltip(self.add_ocr_fix_button, "Teach the matcher that a recurring bad OCR read means a specific Pokemon.")
-        self.save_ocr_failures_check = ttk.Checkbutton(profiles, text="Save OCR misses", variable=self.save_ocr_failures, command=self.on_save_ocr_failures_changed)
-        self.save_ocr_failures_check.grid(row=2, column=0, columnspan=2, sticky="w", pady=(3, 0))
-        self.add_tooltip(self.save_ocr_failures_check, "Save low-confidence name crops and OCR attempts to battle_monitor/ocr_failures for later accuracy tests.")
-
-        row += 1
-        status = ttk.LabelFrame(controls, text="Status", style="Section.TLabelframe", padding=6)
-        status.grid(row=row, column=0, columnspan=2, sticky="nsew", pady=(0, 0))
-        ttk.Label(status, textvariable=self.status_var, wraplength=CONTROL_STATUS_WRAP, style="App.TLabel").pack(anchor="w")
         controls.rowconfigure(row, weight=1)
 
         main = ttk.Frame(self.root, padding=(6, 8, 8, 8), style="App.TFrame")
@@ -1346,6 +1329,12 @@ class BattleMonitorApp:
         self.preview_photo = ImageTk.PhotoImage(img)
         self.preview_label.configure(image=self.preview_photo, text="")
 
+    def toggle_tracking(self) -> None:
+        if self.running:
+            self.stop_tracking()
+        else:
+            self.start_tracking()
+
     def start_tracking(self) -> None:
         if self.running:
             self.status_var.set("Tracking is already running. Use Stop before starting a new scan loop.")
@@ -1367,6 +1356,7 @@ class BattleMonitorApp:
             self.dock_to_game_region(self.dock_position.get())
             docked = True
         self.running = True
+        self.tracking_button_text.set("Stop")
         self.scan_worker_active = False
         self.active_scan_tick = 0
         self.active_scan_started_at = 0.0
@@ -1592,6 +1582,7 @@ class BattleMonitorApp:
 
     def stop_tracking(self) -> None:
         self.running = False
+        self.tracking_button_text.set("Start")
         # Mark any in-flight OCR result as stale. The worker thread may still
         # finish later, but it will be ignored instead of updating the UI.
         self.active_scan_tick = 0
@@ -3250,8 +3241,8 @@ class BattleMonitorApp:
             },
             {
                 "target": self.add_name_button,
-                "title": "2. Optional name tuning",
-                "body": "The app can auto-scan the top-left battle area. Use Add Name and Name Area only if this game needs tighter guidance.",
+                "title": "2. Recommended name zones",
+                "body": "The app can auto-scan the top-left battle area, but tight Add Name zones are recommended for accuracy.",
                 "action_label": "Add Name Region",
                 "action": self.add_name_region,
                 "complete": self.has_any_name_tracking_region,
@@ -3273,9 +3264,9 @@ class BattleMonitorApp:
                 "complete": lambda: bool(self.dock_on_start.get() and self.ultra_compact.get()),
             },
             {
-                "target": self.dock_select_frame,
+                "target": self.dock_position_dropdown,
                 "title": "5. Choose and test docking",
-                "body": "Select Left, Right, Above, or Below, then use Dock Now to test the position. The monitor should not overlap the game region.",
+                "body": "Choose Left, Right, Above, or Below from the dropdown, then use Dock Now to test the position. The monitor should not overlap the game region.",
                 "action_label": "Dock Now",
                 "action": lambda: self.dock_to_game_region(self.dock_position.get()),
                 "complete": lambda: self.last_docked_time > 0,
@@ -3283,15 +3274,15 @@ class BattleMonitorApp:
             {
                 "target": self.save_profile_button,
                 "title": "6. Save the setup",
-                "body": "Save stores the game/window region, name regions, dock direction, compact mode, and collapsed sections.",
+                "body": "Save stores the game/window region, tight name regions, dock direction, and compact mode.",
                 "action_label": "Save Profile",
                 "action": self.save_profile_dialog,
                 "complete": lambda: self.last_profile_save_time > 0,
             },
             {
-                "target": self.start_button,
+                "target": self.tracking_button,
                 "title": "7. Start tracking",
-                "body": "Start begins OCR tracking. Once OCR reads a Pokémon name, the battle card appears and only refreshes when the detection changes.",
+                "body": "Start begins OCR tracking; the same button changes to Stop while tracking is active.",
                 "action_label": "Start",
                 "action": self.start_tracking,
                 "finish_label": "Finish Tour",
@@ -3315,13 +3306,8 @@ class BattleMonitorApp:
 
     def setup_status_summary(self) -> str:
         region = "game region ready" if self.game_region else "no game region yet"
-        effective = self.effective_name_regions()
         if self.name_regions:
             names = f"{len(self.name_regions)} precise name region(s)"
-            if self.name_scan_area:
-                names += " with Name Area confirmation"
-        elif self.name_scan_area:
-            names = f"name area → {len(effective)} auto slot(s)"
         else:
             names = "auto top-left nameplate scan"
         ocr = "OCR ready" if self.ocr.available else "OCR not ready"
@@ -3814,7 +3800,7 @@ class BattleMonitorApp:
         return {
             "game_region": self.game_region.to_dict() if self.game_region else None,
             "name_regions": [r.to_dict() for r in sorted_name_regions(self.name_regions)],
-            "name_scan_area": self.name_scan_area.to_dict() if self.name_scan_area else None,
+            "name_scan_area": None,
             "threshold": int(float(self.threshold_var.get())),
             "preview_visible": bool(self.preview_visible.get()),
             "controls_visible": bool(self.controls_visible.get()),
@@ -3831,8 +3817,10 @@ class BattleMonitorApp:
         game = payload.get("game_region")
         self.game_region = Rect.from_dict(game) if game else None
         self.name_regions = sorted_name_regions([Rect.from_dict(r) for r in payload.get("name_regions", [])])
-        area = payload.get("name_scan_area")
-        self.name_scan_area = Rect.from_dict(area) if area else None
+        # Name Area was removed from the UI. Keep the automatic top-left fallback,
+        # but ignore old profile name_scan_area values so saved profiles do not
+        # silently re-enable the broad custom mode.
+        self.name_scan_area = None
         if payload.get("threshold"):
             self.threshold_var.set(int(payload["threshold"]))
         if "dock_on_start" in payload:
