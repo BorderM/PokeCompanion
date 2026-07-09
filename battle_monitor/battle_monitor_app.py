@@ -107,11 +107,13 @@ for import_path in (THIS_DIR, Path(__file__).resolve().parent):
         sys.path.insert(0, str(import_path))
 
 from ocr_engine import OcrEngine
+from ocr_quality import OcrFailureRecorder, TemporalMatchStabilizer
 from pokemon_repository import PokemonRepository, MatchResult, normalize_name
 from region_selector import Rect, select_screen_region
 
 CONFIG_PATH = USER_DATA_DIR / "battle_monitor_config.json"
 OCR_CORRECTIONS_PATH = USER_DATA_DIR / "ocr_corrections.json"
+OCR_FAILURE_DIR = USER_DATA_DIR / "ocr_failures"
 PROFILE_DIR = USER_DATA_DIR / "profiles"
 DEFAULT_PROFILE_PATH = PROFILE_DIR / "default.json"
 SCAN_INTERVAL_MS = 450
@@ -291,6 +293,12 @@ class BattleMonitorApp:
         self.repo = PokemonRepository(PROJECT_ROOT)
         self.ocr = OcrEngine(self.config.get("tesseract_cmd"))
         self.ocr_corrections = self.load_ocr_corrections()
+        self.ocr_stabilizer = TemporalMatchStabilizer(confirm_score=95, repeat_score=84, repeat_count=2)
+        self.ocr_failure_recorder = OcrFailureRecorder(
+            OCR_FAILURE_DIR,
+            enabled=bool(self.config.get("save_ocr_failures", False)),
+            max_saved=int(self.config.get("max_saved_ocr_failures", 100) or 100),
+        )
         self.sct = mss.mss()
 
         self.game_region: Optional[Rect] = None
@@ -348,6 +356,7 @@ class BattleMonitorApp:
             "abilities": tk.BooleanVar(value=True),
         }
         self.show_debug = tk.BooleanVar(value=False)
+        self.save_ocr_failures = tk.BooleanVar(value=bool(self.config.get("save_ocr_failures", False)))
         self.status_var = tk.StringVar(value="Select a game region to begin.")
         self.scan_status_var = tk.StringVar(value="Idle")
         self.threshold_var = tk.IntVar(value=MIN_MATCH_SCORE)
@@ -413,6 +422,17 @@ class BattleMonitorApp:
     def save_ocr_corrections(self) -> None:
         OCR_CORRECTIONS_PATH.parent.mkdir(parents=True, exist_ok=True)
         OCR_CORRECTIONS_PATH.write_text(json.dumps(self.ocr_corrections, indent=2, sort_keys=True), encoding="utf-8")
+
+    def on_save_ocr_failures_changed(self) -> None:
+        enabled = bool(self.save_ocr_failures.get())
+        self.config["save_ocr_failures"] = enabled
+        self.ocr_failure_recorder.enabled = enabled
+        self.save_config()
+        if enabled:
+            OCR_FAILURE_DIR.mkdir(parents=True, exist_ok=True)
+            self.status_var.set(f"OCR miss capture enabled: {OCR_FAILURE_DIR}")
+        else:
+            self.status_var.set("OCR miss capture disabled.")
 
     def corrected_match(self, raw_text: str) -> Optional[MatchResult]:
         normalized = normalize_name(raw_text)
@@ -530,6 +550,9 @@ class BattleMonitorApp:
         self.add_ocr_fix_button = ttk.Button(profiles, text="Add OCR Fix", command=self.add_ocr_fix_dialog)
         self.add_ocr_fix_button.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(5, 2))
         self.add_tooltip(self.add_ocr_fix_button, "Teach the matcher that a recurring bad OCR read means a specific Pokemon.")
+        self.save_ocr_failures_check = ttk.Checkbutton(profiles, text="Save OCR misses", variable=self.save_ocr_failures, command=self.on_save_ocr_failures_changed)
+        self.save_ocr_failures_check.grid(row=2, column=0, columnspan=2, sticky="w", pady=(3, 0))
+        self.add_tooltip(self.save_ocr_failures_check, "Save low-confidence name crops and OCR attempts to battle_monitor/ocr_failures for later accuracy tests.")
 
         row += 1
         status = ttk.LabelFrame(controls, text="Status", style="Section.TLabelframe", padding=6)
@@ -803,6 +826,7 @@ class BattleMonitorApp:
             self.current_keys.clear()
             self.slot_form_overrides.clear()
             self.scan_histories.clear()
+            self.ocr_stabilizer.clear()
             self.slot_miss_counts.clear()
             self.auto_slot_pending.clear()
             self.last_rendered_keys = tuple()
@@ -1032,6 +1056,7 @@ class BattleMonitorApp:
         self.current_keys.clear()
         self.slot_form_overrides.clear()
         self.scan_histories.clear()
+        self.ocr_stabilizer.clear()
         self.slot_miss_counts.clear()
         self.auto_slot_pending.clear()
         self.last_rendered_keys = tuple()
@@ -1066,6 +1091,7 @@ class BattleMonitorApp:
         self.current_keys.clear()
         self.slot_form_overrides.clear()
         self.scan_histories.clear()
+        self.ocr_stabilizer.clear()
         self.slot_miss_counts.clear()
         self.auto_slot_pending.clear()
         self.last_rendered_keys = tuple()
@@ -1119,6 +1145,7 @@ class BattleMonitorApp:
         self.current_keys.clear()
         self.slot_form_overrides.clear()
         self.scan_histories.clear()
+        self.ocr_stabilizer.clear()
         self.slot_miss_counts.clear()
         self.auto_slot_pending.clear()
         self.last_rendered_keys = tuple()
@@ -1130,6 +1157,7 @@ class BattleMonitorApp:
         self.current_keys.clear()
         self.slot_form_overrides.clear()
         self.scan_histories.clear()
+        self.ocr_stabilizer.clear()
         self.slot_miss_counts.clear()
         self.auto_slot_pending.clear()
         self.last_rendered_keys = tuple()
@@ -2423,7 +2451,7 @@ class BattleMonitorApp:
                     elif self._name_area_full_fallback_allowed(area_img):
                         scan_items.append((0, [("name_area_full", area_img)]))
                     else:
-                        results.append({"idx": 0, "source": "name_area_no_panel", "attempts": [], "best": None, "best_preset": "", "capture_error": None})
+                        results.append({"idx": 0, "source": "name_area_no_panel", "attempts": [], "best": None, "best_preset": "", "capture_error": None, "debug_image": area_img})
                 else:
                     confirmed_panels: Optional[List[Rect]] = None
                     if name_area_confirm:
@@ -2482,10 +2510,12 @@ class BattleMonitorApp:
                             if stop_slot:
                                 break
                     except Exception as exc:
-                        results.append({"idx": idx, "source": result_source, "capture_error": str(exc), "attempts": [], "best": None, "best_preset": ""})
+                        debug_image = variants[0][1] if variants else None
+                        results.append({"idx": idx, "source": result_source, "capture_error": str(exc), "attempts": [], "best": None, "best_preset": "", "debug_image": debug_image})
                         continue
 
-                    results.append({"idx": idx, "source": result_source, "attempts": attempts, "best": best, "best_preset": best_preset, "capture_error": None})
+                    debug_image = variants[0][1] if variants else None
+                    results.append({"idx": idx, "source": result_source, "attempts": attempts, "best": best, "best_preset": best_preset, "capture_error": None, "debug_image": debug_image})
         except Exception as exc:
             worker_error = str(exc)
 
@@ -2558,7 +2588,9 @@ class BattleMonitorApp:
                         best_preset = "ui_fallback"
             source_name = result.get("source", "")
             allowed = bool(best and ((best.score >= threshold) or auto_area_mode) and ((not auto_area_mode) or self._auto_area_match_allowed(best, best.raw_text, corrections, idx, source_name)))
-            confirmed = bool(allowed and ((not auto_area_mode) or self._auto_slot_confirmed(idx, best, best.raw_text, corrections, source_name)))
+            auto_confirmed = bool((not auto_area_mode) or (allowed and self._auto_slot_confirmed(idx, best, best.raw_text, corrections, source_name)))
+            stable_best = best if auto_area_mode else self.ocr_stabilizer.accept(idx, best if allowed else None)
+            confirmed = bool(allowed and auto_confirmed and stable_best)
             if confirmed:
                 history = self.scan_histories.setdefault(idx, deque(maxlen=3))
                 history.append(best.key)
@@ -2583,6 +2615,9 @@ class BattleMonitorApp:
                         f"Slot {idx + 1}: pending Name Area confirmation"
                         f" ({pending_count}/{AUTO_AREA_SECOND_SLOT_CONFIRM_SCANS}) from {source}. {debug_text}"
                     )
+                elif allowed and not auto_area_mode:
+                    self.slot_miss_counts[idx] = 0
+                    debug_lines.append(f"Slot {idx + 1}: waiting for repeat confirmation from {source}. {debug_text}")
                 else:
                     self.slot_miss_counts[idx] = self.slot_miss_counts.get(idx, 0) + 1
                     self.auto_slot_pending.pop(idx, None)
@@ -2590,6 +2625,16 @@ class BattleMonitorApp:
                         self.current_keys.pop(idx, None)
                         self.slot_form_overrides.pop(idx, None)
                     debug_lines.append(f"Slot {idx + 1}: waiting / no confident match from {source}. {debug_text}")
+                    debug_image = result.get("debug_image")
+                    if debug_image is not None:
+                        self.ocr_failure_recorder.record(
+                            image=debug_image,
+                            slot_idx=idx,
+                            source=source,
+                            attempts=attempts,
+                            threshold=threshold,
+                            reason="no_confident_match",
+                        )
 
         # If dynamic Name Area detection no longer sees a previous auto slot,
         # clear it after a short debounce. This prevents a stale/flickering Slot
@@ -3725,6 +3770,7 @@ class BattleMonitorApp:
         self.current_keys.clear()
         self.slot_form_overrides.clear()
         self.scan_histories.clear()
+        self.ocr_stabilizer.clear()
         self.slot_miss_counts.clear()
         self.auto_slot_pending.clear()
         self.last_rendered_keys = tuple()

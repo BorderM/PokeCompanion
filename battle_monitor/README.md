@@ -314,3 +314,10 @@ Installer version: 0.19
 - Follow window (formerly Auto window region) keeps the captured game bounds synced to the attached emulator window while tracking. If the monitor is docked and controls are hidden, it follows the emulator when it moves.
 - Added an OCR watchdog so a stuck Tesseract scan is abandoned and retried instead of requiring Stop/Start.
 - Docked mode uses more available side space when possible for better readability.
+
+## v31 Tesseract OCR quality notes
+
+- Kept Tesseract as the OCR engine, but added a post-OCR quality layer for common Pokémon pixel-font mistakes such as `I/l`, terminal `m/r`, `rn/m`, and badly read `Lv/HP` fragments.
+- Medium-confidence precise-name reads now require repeat confirmation; high-confidence reads still appear immediately.
+- Added **Save OCR misses**. When enabled, low-confidence crops plus OCR attempts are saved to `battle_monitor/ocr_failures/` so bad reads can become test samples instead of guesswork.
+- Added `battle_monitor/test_ocr_samples.py` for repeatable OCR accuracy checks against saved image samples and an `expected.json` file.

@@ -15,6 +15,11 @@ except Exception:  # pragma: no cover - fallback for first run before dependency
 else:
     difflib = None
 
+try:
+    from .ocr_quality import build_ocr_text_variants
+except ImportError:  # Support direct script-style imports from battle_monitor/.
+    from ocr_quality import build_ocr_text_variants
+
 
 TYPE_LABELS = {
     "four_times_effective": "4× Weak",
@@ -214,6 +219,8 @@ class PokemonRepository:
 
         for value in (normalized, cleaned):
             add(value)
+            for repaired in build_ocr_text_variants(value):
+                add(repaired)
             # Fan-game level markers often OCR as "Lyd", "Luad", "Lusi", etc.
             # Split only when there is whitespace before the level-ish token.
             for pattern in (
