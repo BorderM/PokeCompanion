@@ -328,3 +328,12 @@ Installer version: 0.19
 - The Select Game Window dialog has its own scrollbar for long window lists.
 - Stale opponent cards clear back to `Idle. Scanning for Pokémon…` after repeated scans with no confident name.
 - Precise Add Name zones are ordered top-to-bottom, then left-to-right, so the upper double-battle name zone is Slot 1 and the lower zone is Slot 2.
+
+## v33 control-panel simplification
+
+- Moved Profiles / OCR to the top so returning users can load a profile first.
+- Removed the duplicate `Battle Monitor` header inside the left controls; the title bar already names the app.
+- Removed the custom `Name Area` control. The app still keeps the automatic top-left nameplate scan when no tight Add Name zones exist.
+- Replaced the four dock-position radio buttons with a compact dropdown selector.
+- Replaced separate Start and Stop controls with one alternating Start/Stop button.
+- Removed the left-side Status box to free space; live scan state remains visible in the compact top bar and right-side idle/card area.
