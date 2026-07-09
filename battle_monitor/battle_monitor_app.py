@@ -583,6 +583,14 @@ class BattleMonitorApp:
         self.show_controls_button = ttk.Button(self.compact_topbar, textvariable=self.controls_button_text, width=12, command=self.toggle_controls_panel)
         self.show_controls_button.pack(side="right")
         self.add_tooltip(self.show_controls_button, "Hide or show the setup controls.")
+        self.topbar_compact_check = ttk.Checkbutton(
+            self.compact_topbar,
+            text="Compact",
+            variable=self.ultra_compact,
+            command=self.on_compact_option_changed,
+        )
+        self.topbar_compact_check.pack(side="right", padx=(0, 8))
+        self.add_tooltip(self.topbar_compact_check, "Toggle the compact battle card without opening the left controls.")
 
         self.preview_box = ttk.LabelFrame(main, text="Region preview", style="Section.TLabelframe", padding=6)
         self.preview_box.grid(row=1, column=0, sticky="ew", pady=(0, 6))
@@ -990,117 +998,49 @@ class BattleMonitorApp:
             self.status_var.set("Controls shown.")
 
     def position_expanded_controls_window(self) -> None:
-        """Show controls by expanding away from the selected game region.
+        """Show controls at a usable width, even if that overlaps the game.
 
-        In docked mode, the game region is treated as a hard no-overlap boundary.
-        If the monitor is docked to the left, the window expands further left and
-        keeps its right edge flush to the game. If there is not enough room for
-        the full target width, it uses whatever space exists instead of jumping
-        over the game window.
+        Docked/hidden mode still snaps beside the selected game region. Expanded
+        controls mode is for setup, so preserving readable controls and a useful
+        right panel is more important than avoiding overlap with the emulator.
         """
-        target_w = EXPANDED_CONTROLS_TARGET_WIDTH
-        target_h = max(580, self.root.winfo_height())
+        target_w = min(EXPANDED_CONTROLS_TARGET_WIDTH, max(1, self.root.winfo_screenwidth()))
+        target_h = min(max(580, self.root.winfo_height()), max(1, self.root.winfo_screenheight()))
         screen_w = max(1, self.root.winfo_screenwidth())
         screen_h = max(1, self.root.winfo_screenheight())
+        width = min(screen_w, max(EXPANDED_CONTROLS_MIN_WIDTH, int(target_w)))
+        height = max(400, int(target_h))
 
-        if not self.game_region:
-            width = min(target_w, screen_w)
-            height = min(target_h, screen_h)
-            self.root.geometry(f"{int(width)}x{int(height)}+{int(max(0, min(self.root.winfo_x(), screen_w - width)))}+{int(max(0, min(self.root.winfo_y(), screen_h - height)))}")
-            return
+        if self.game_region:
+            region = self.game_region
+            position = (self.last_docked_position or self.dock_position.get() or "left").lower()
+            if position == "left":
+                # Keep the left edge from docked mode and let the extra width
+                # extend over the game instead of squeezing the right panel.
+                x = region.x - (ULTRA_DOCK_WIDTH if self.ultra_compact.get() else DOCK_WIDTH)
+                y = region.y
+            elif position == "right":
+                x = region.x + region.w
+                y = region.y
+            elif position == "above":
+                x = region.x
+                y = region.y - height
+            elif position == "below":
+                x = region.x
+                y = region.y + region.h
+            else:
+                x = self.root.winfo_x()
+                y = self.root.winfo_y()
+        else:
+            x = self.root.winfo_x()
+            y = self.root.winfo_y()
 
-        region = self.game_region
-        position = (self.last_docked_position or self.dock_position.get() or "left").lower()
-        min_w = EXPANDED_CONTROLS_MIN_WIDTH
-        hard_min_w = CONTROL_PANEL_WIDTH + 24
-        min_h = 400
-
-        def clamp_y(preferred_y: int, height: int) -> int:
-            return int(max(0, min(preferred_y, max(0, screen_h - height))))
-
-        def left_rect():
-            available = max(0, region.x)
-            if available < hard_min_w:
-                return None
-            width = max(min_w, min(target_w, available)) if available >= min_w else available
-            if width <= 0:
-                return None
-            x = max(0, region.x - width)
-            height = min(target_h, screen_h)
-            y = clamp_y(region.y, height)
-            return int(width), int(height), int(x), int(y)
-
-        def right_rect():
-            available = max(0, screen_w - (region.x + region.w))
-            if available < hard_min_w:
-                return None
-            width = max(min_w, min(target_w, available)) if available >= min_w else available
-            if width <= 0:
-                return None
-            x = region.x + region.w
-            height = min(target_h, screen_h)
-            y = clamp_y(region.y, height)
-            return int(width), int(height), int(x), int(y)
-
-        def above_rect():
-            available = max(0, region.y)
-            if available < min_h:
-                return None
-            height = max(min_h, min(target_h, available))
-            width = min(target_w, screen_w)
-            x = int(max(0, min(region.x, max(0, screen_w - width))))
-            y = int(region.y - height)
-            return int(width), int(height), x, y
-
-        def below_rect():
-            available = max(0, screen_h - (region.y + region.h))
-            if available < min_h:
-                return None
-            height = max(min_h, min(target_h, available))
-            width = min(target_w, screen_w)
-            x = int(max(0, min(region.x, max(0, screen_w - width))))
-            y = int(region.y + region.h)
-            return int(width), int(height), x, y
-
-        strategies = {
-            "left": left_rect,
-            "right": right_rect,
-            "above": above_rect,
-            "below": below_rect,
-        }
-        # Prefer the current dock side first, then other positions that can be
-        # shown without touching the selected game region.
-        fallback_order = {
-            "left": ["above", "below", "right"],
-            "right": ["above", "below", "left"],
-            "above": ["left", "right", "below"],
-            "below": ["left", "right", "above"],
-        }
-        rect = strategies.get(position, left_rect)()
-        used_position = position
-        if rect is None:
-            for candidate in fallback_order.get(position, ["left", "right", "above", "below"]):
-                rect = strategies[candidate]()
-                if rect is not None:
-                    used_position = candidate
-                    break
-
-        if rect is None:
-            # Last resort: keep the monitor on the same side and use the smallest
-            # possible on-screen size. This can be cramped, but still avoids the
-            # selected game region when any side space exists.
-            width = min(target_w, max(min_w, screen_w))
-            height = min(target_h, screen_h)
-            x = max(0, min(self.root.winfo_x(), max(0, screen_w - width)))
-            y = max(0, min(self.root.winfo_y(), max(0, screen_h - height)))
-            rect = (int(width), int(height), int(x), int(y))
-            used_position = "current screen space"
-
-        width, height, x, y = rect
+        x = int(max(0, min(x, max(0, screen_w - width))))
+        y = int(max(0, min(y, max(0, screen_h - height))))
         self.root.minsize(min(EXPANDED_CONTROLS_MIN_WIDTH, max(1, width)), 400)
-        self.root.geometry(f"{int(width)}x{int(height)}+{int(x)}+{int(y)}")
+        self.root.geometry(f"{int(width)}x{int(height)}+{x}+{y}")
         self.reset_info_canvas_width()
-        self.status_var.set(f"Controls shown {used_position}; game region was not overlapped.")
+        self.status_var.set("Controls shown; setup view may overlap the game until hidden/docked again.")
 
     def toggle_preview(self) -> None:
         self.preview_visible.set(not self.preview_visible.get())
