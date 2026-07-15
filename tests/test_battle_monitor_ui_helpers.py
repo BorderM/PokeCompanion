@@ -73,17 +73,24 @@ def test_auto_battle_layout_prefers_detected_double_slots():
     app.double_name_regions = [Rect(15, 30, 120, 24), Rect(15, 180, 120, 24)]
     mode = {"value": "single"}
     app.battle_slot_mode = SimpleNamespace(get=lambda: mode["value"], set=lambda value: mode.__setitem__("value", value))
+    app.slot_form_overrides = {}
     app.current_keys = {1: "pikachu"}
     app.update_auto_battle_layout({1: ["Pikachu"]})
     assert mode["value"] == "double"
 
-    app.current_keys = {0: "pikachu"}
-    app.update_auto_battle_layout({0: ["Pikachu"]})
+    app.current_keys = {1: "arcanine", 2: "volbeat"}
+    app.slot_form_overrides = {1: "arcanine-form", 2: "volbeat-form"}
+    app.update_auto_battle_layout({0: ["Geodude"]})
     assert mode["value"] == "single"
+    assert app.current_keys == {}
+    assert app.slot_form_overrides == {}
 
     app.current_keys = {0: "roselia"}
+    app.slot_form_overrides = {0: "roselia-form"}
     app.update_auto_battle_layout({0: ["Roselia"], 1: ["Volbeat"]})
     assert mode["value"] == "double"
+    assert app.current_keys == {}
+    assert app.slot_form_overrides == {}
 
     app.current_keys = {}
     mode["value"] = "single"

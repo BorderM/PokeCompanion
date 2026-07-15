@@ -1396,16 +1396,23 @@ class BattleMonitorApp:
             return [1, 2]
         return [0]
 
-    def update_auto_battle_layout(self, current_scan_texts: Optional[Dict[int, List[str]]] = None) -> None:
+    def update_auto_battle_layout(self, current_scan_texts: Optional[Dict[int, List[str]]] = None, scan_detected_slots: Optional[set] = None) -> None:
         current_scan_texts = current_scan_texts or {}
-        has_double_key = any(slot_idx in self.current_keys for slot_idx in (1, 2))
-        has_single_key = 0 in self.current_keys
-        has_double_text = any(current_scan_texts.get(slot_idx) for slot_idx in (1, 2))
-        has_single_text = bool(current_scan_texts.get(0))
-        if has_double_key or has_double_text:
+        scan_detected_slots = scan_detected_slots or set()
+        # Decide from THIS scan's evidence, not from whatever cards were already
+        # visible. Stale cards from the previous battle type should not pin the
+        # information panel to single or double.
+        has_double_result = any(slot_idx in scan_detected_slots for slot_idx in (1, 2)) or any(current_scan_texts.get(slot_idx) for slot_idx in (1, 2))
+        has_single_result = 0 in scan_detected_slots or bool(current_scan_texts.get(0))
+        if has_double_result:
             self.battle_slot_mode.set("double")
-        elif has_single_key or has_single_text:
+            self.current_keys.pop(0, None)
+            self.slot_form_overrides.pop(0, None)
+        elif has_single_result:
             self.battle_slot_mode.set("single")
+            for slot_idx in (1, 2):
+                self.current_keys.pop(slot_idx, None)
+                self.slot_form_overrides.pop(slot_idx, None)
 
     def on_battle_slot_mode_changed(self) -> None:
         mode = (self.battle_slot_mode.get() or "single").lower()
@@ -2684,6 +2691,7 @@ class BattleMonitorApp:
         before_keys = tuple(sorted(self.current_keys.items()))
         before_layout = self.battle_slot_mode.get()
         seen_result_slots = set()
+        scan_detected_slots = set()
         current_scan_texts: Dict[int, List[str]] = {}
 
         for result in results:
@@ -2733,6 +2741,7 @@ class BattleMonitorApp:
                 self.auto_slot_pending.pop(idx, None)
                 self.slot_miss_counts[idx] = 0
                 self.current_keys[idx] = self.apply_slot_form_override(idx, best.key)
+                scan_detected_slots.add(idx)
                 # Prefer showing the OCR text that actually matched, not the
                 # first noisy OCR attempt. This makes the status/placeholder
                 # reflect the same text that drove the card render.
@@ -2782,25 +2791,27 @@ class BattleMonitorApp:
         # contains a Pokémon name, render the card even if the worker did not
         # choose a best match. This specifically protects cases like the UI
         # showing "Latest OCR: Slot 1: Heatmor" but no card.
-        if not self.current_keys:
-            for slot_idx, values in list(current_scan_texts.items()):
-                for raw_text in values:
-                    source_name = "ui_direct"
-                    match = self._match_auto_area_text(raw_text, threshold, corrections, source_name) if auto_area_mode else self._match_precise_text(raw_text, threshold, corrections, source_name)
-                    if match and auto_area_mode and not self._auto_area_match_allowed(match, raw_text, corrections, slot_idx, source_name):
-                        match = None
-                    if match and auto_area_mode and not self._auto_slot_confirmed(slot_idx, match, match.raw_text, corrections, source_name):
-                        match = None
-                    if match and match.score >= threshold:
-                        self.auto_slot_pending.pop(slot_idx, None)
-                        self.slot_miss_counts[slot_idx] = 0
-                        self.current_keys[slot_idx] = self.apply_slot_form_override(slot_idx, match.key)
-                        debug_lines.append(
-                            f"Slot {slot_idx + 1}: ui-direct raw='{match.raw_text}' → {match.display_name} ({match.score:.1f})"
-                        )
-                        break
+        for slot_idx, values in list(current_scan_texts.items()):
+            if slot_idx in scan_detected_slots:
+                continue
+            for raw_text in values:
+                source_name = "ui_direct"
+                match = self._match_auto_area_text(raw_text, threshold, corrections, source_name) if auto_area_mode else self._match_precise_text(raw_text, threshold, corrections, source_name)
+                if match and auto_area_mode and not self._auto_area_match_allowed(match, raw_text, corrections, slot_idx, source_name):
+                    match = None
+                if match and auto_area_mode and not self._auto_slot_confirmed(slot_idx, match, match.raw_text, corrections, source_name):
+                    match = None
+                if match and match.score >= threshold:
+                    self.auto_slot_pending.pop(slot_idx, None)
+                    self.slot_miss_counts[slot_idx] = 0
+                    self.current_keys[slot_idx] = self.apply_slot_form_override(slot_idx, match.key)
+                    scan_detected_slots.add(slot_idx)
+                    debug_lines.append(
+                        f"Slot {slot_idx + 1}: ui-direct raw='{match.raw_text}' → {match.display_name} ({match.score:.1f})"
+                    )
+                    break
 
-        self.update_auto_battle_layout(current_scan_texts)
+        self.update_auto_battle_layout(current_scan_texts, scan_detected_slots)
 
         if self.current_keys:
             names = []
