@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 BATTLE_MONITOR_DIR = PROJECT_ROOT / "battle_monitor"
@@ -37,6 +38,29 @@ def test_topbar_has_compact_toggle_and_expanded_setup_may_overlap_game():
     assert "instead of resizing in place and overlapping the emulator" in source
 
 
+def test_battle_slot_mode_source_has_double_slots_and_slot_ocr_fix():
+    source = (BATTLE_MONITOR_DIR / "battle_monitor_app.py").read_text(encoding="utf-8")
+    assert "self.battle_slot_mode" in source
+    assert "values=(\"single\", \"double\")" in source
+    assert "Slot {slot_idx + 1}: {status}" in source
+    assert "self.add_ocr_fix_dialog(s)" in source
+    assert "battle_slot_mode" in source
+
+
+def test_expected_battle_slots_uses_single_or_double_mode():
+    app = BattleMonitorApp.__new__(BattleMonitorApp)
+    app.current_keys = {}
+    app.last_slot_attempt_texts = {}
+    app.battle_slot_mode = SimpleNamespace(get=lambda: "single")
+    assert app.expected_battle_slots() == [0]
+
+    app.battle_slot_mode = SimpleNamespace(get=lambda: "double")
+    assert app.expected_battle_slots() == [0, 1]
+
+    app.current_keys = {2: "pikachu"}
+    assert app.expected_battle_slots() == [0, 1, 2]
+
+
 def test_mark_slot_miss_clears_stale_detected_card_after_threshold():
     app = BattleMonitorApp.__new__(BattleMonitorApp)
     app.slot_miss_counts = {}
@@ -53,5 +77,5 @@ def test_mark_slot_miss_clears_stale_detected_card_after_threshold():
     assert app.mark_slot_miss(0) is True
     assert app.current_keys == {}
     assert app.slot_form_overrides == {}
-    assert app.last_slot_attempt_texts == {}
-    assert app.last_slot_raw_texts == {}
+    assert app.last_slot_attempt_texts == {0: ["Pikachu"]}
+    assert app.last_slot_raw_texts == {0: "Pikachu"}

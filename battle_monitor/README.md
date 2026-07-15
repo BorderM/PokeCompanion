@@ -358,3 +358,10 @@ Installer version: 0.19
 ## v37 compact toggle redocking
 
 - Toggling `Compact` while controls are hidden now re-runs docking instead of resizing in place, keeping the companion flush beside the selected game window instead of overlapping the emulator.
+
+## v38 battle slot mode and visible slot OCR fixes
+
+- Added a `Battle slots` selector for `single` vs `double` battle setups.
+- Single mode keeps one opponent slot visible; double mode keeps two slot panels visible so missing/unclear OCR in one slot is obvious.
+- The information panel now shows slot-specific `OCR Fix` buttons on detected Pokémon cards and unclear slot cards, prefilled from that slot's recent OCR text when available.
+- Profiles now save and reload the selected battle slot mode.
