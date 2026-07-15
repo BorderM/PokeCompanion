@@ -120,6 +120,7 @@ SCAN_INTERVAL_MS = 450
 WAITING_SCAN_INTERVAL_MS = 250
 FOLLOW_WINDOW_INTERVAL_MS = 300
 DEBUG_RENDER_INTERVAL_SEC = 2.5
+LIVE_OCR_ATTEMPT_LIMIT_PER_SLOT = 6
 PREVIEW_REFRESH_EVERY_SCANS = 4
 MIN_MATCH_SCORE = 84
 # Name Area scans are intentionally stricter than precise Add Name crops.
@@ -676,7 +677,8 @@ class BattleMonitorApp:
     def info_layout_bucket(self, width: int) -> tuple:
         width = max(1, int(width))
         two_column_min = 640 if self.ultra_compact.get() else 760
-        columns = 2 if len(self.current_keys) >= 2 and width >= two_column_min else 1
+        slots = self.expected_battle_slots()
+        columns = 2 if len(slots) >= 2 and width >= two_column_min else 1
         card_width = max(220, width // columns)
         if self.ultra_compact.get():
             tier = 3 if card_width >= 700 else (2 if card_width >= 560 else (1 if card_width >= 430 else 0))
@@ -690,7 +692,7 @@ class BattleMonitorApp:
         bucket = self.info_layout_bucket(event.width)
         if bucket != self.last_card_width_bucket:
             self.last_card_width_bucket = bucket
-            if self.current_keys:
+            if self.last_rendered_keys:
                 if self.resize_render_job:
                     try:
                         self.root.after_cancel(self.resize_render_job)
@@ -700,7 +702,7 @@ class BattleMonitorApp:
 
     def rerender_cards_for_resize(self) -> None:
         self.resize_render_job = None
-        if not self.current_keys:
+        if not self.last_rendered_keys:
             return
         self.last_rendered_keys = tuple()
         self.render_detected(self.last_debug_lines, preserve_scroll=True, force=True)
@@ -1170,14 +1172,39 @@ class BattleMonitorApp:
     def slot_layout(self, slot_idx: int) -> str:
         return "double" if slot_idx in {1, 2} else "single"
 
-    def reset_slot_detection_state(self) -> None:
+    def reset_slot_detection_state(self, clear_recent_text: bool = True, invalidate_scan: bool = True) -> None:
         self.current_keys.clear()
         self.slot_form_overrides.clear()
         self.scan_histories.clear()
         self.ocr_stabilizer.clear()
         self.slot_miss_counts.clear()
         self.auto_slot_pending.clear()
+        if clear_recent_text:
+            self.last_slot_attempt_texts.clear()
+            self.last_slot_raw_texts.clear()
+        if invalidate_scan:
+            self.invalidate_active_scan_for_layout_change()
         self.last_rendered_keys = tuple()
+
+    def invalidate_active_scan_for_layout_change(self) -> None:
+        """Prevent pre-layout-change OCR results from rewriting the panel.
+
+        Slot setup changes the meaning of scan slots immediately. Any worker that
+        started before that change captured the old regions and must not be
+        allowed to render after the user switches between Singles and Doubles.
+        """
+        self.scan_worker_active = False
+        self.active_scan_tick = 0
+        try:
+            while not self.scan_result_queue.empty():
+                self.scan_result_queue.get_nowait()
+        except Exception:
+            pass
+        if getattr(self, "running", False) and hasattr(self, "root"):
+            try:
+                self.root.after(50, self.scan_once)
+            except Exception:
+                pass
 
     def select_single_name_slot(self) -> None:
         rel = self.select_relative_name_region("Select the single-battle opponent name box")
@@ -1186,6 +1213,7 @@ class BattleMonitorApp:
             return
         self.single_name_region = rel
         self.sync_active_name_regions()
+        self.battle_slot_mode.set("single")
         self.reset_slot_detection_state()
         self.status_var.set(f"Single name slot saved: {rel.w}×{rel.h} at +{rel.x},+{rel.y}. Double slots stay saved and scan-active in this profile.")
         self.update_preview()
@@ -1202,6 +1230,7 @@ class BattleMonitorApp:
             return
         self.double_name_regions = [first, second]
         self.sync_active_name_regions()
+        self.battle_slot_mode.set("double")
         self.reset_slot_detection_state()
         self.status_var.set("Double name slots saved: Slot 1 and Slot 2. Single slot stays saved and scan-active in this profile.")
         self.update_preview()
@@ -1284,6 +1313,17 @@ class BattleMonitorApp:
         if self.name_regions:
             return [Rect(r.x, r.y, r.w, r.h) for r in self.name_regions]
         return self.derive_regions_from_name_area()
+
+    def ordered_name_regions_for_scan(self, name_regions: List[Rect]) -> List[tuple[int, Rect]]:
+        """Pair precise regions with stable slot IDs and scan visible layout first."""
+        paired = list(zip(self.name_region_slots, name_regions)) if self.name_regions else list(enumerate(name_regions))
+        preferred_slots = self.expected_battle_slots()
+        priority = {slot: idx for idx, slot in enumerate(preferred_slots)}
+        fallback_priority = len(priority)
+        return sorted(
+            paired,
+            key=lambda item: (priority.get(item[0], fallback_priority), self.name_region_slots.index(item[0]) if item[0] in self.name_region_slots else item[0]),
+        )
 
     def active_name_region_labels(self) -> List[str]:
         self.sync_active_name_regions()
@@ -1402,13 +1442,16 @@ class BattleMonitorApp:
         # Decide from THIS scan's evidence, not from whatever cards were already
         # visible. Stale cards from the previous battle type should not pin the
         # information panel to single or double.
-        has_double_result = any(slot_idx in scan_detected_slots for slot_idx in (1, 2)) or any(current_scan_texts.get(slot_idx) for slot_idx in (1, 2))
-        has_single_result = 0 in scan_detected_slots or bool(current_scan_texts.get(0))
-        if has_double_result:
+        double_detected = any(slot_idx in scan_detected_slots for slot_idx in (1, 2))
+        single_detected = 0 in scan_detected_slots
+        # Confirmed Pokémon matches are the authoritative layout evidence. Raw
+        # OCR text such as "Heatnor-" is only useful for OCR Fix placeholders;
+        # it must not keep the panel pinned to the previous layout.
+        if double_detected:
             self.battle_slot_mode.set("double")
             self.current_keys.pop(0, None)
             self.slot_form_overrides.pop(0, None)
-        elif has_single_result:
+        elif single_detected:
             self.battle_slot_mode.set("single")
             for slot_idx in (1, 2):
                 self.current_keys.pop(slot_idx, None)
@@ -1754,10 +1797,11 @@ class BattleMonitorApp:
         self.active_scan_started_at = time.monotonic()
         self.scan_status_var.set("OCR scan running…")
 
-        worker_name_regions = list(zip(self.name_region_slots, name_regions)) if self.name_regions else name_regions
+        worker_name_regions = self.ordered_name_regions_for_scan(name_regions) if self.name_regions else name_regions
+        active_layout = (self.battle_slot_mode.get() or "single").lower()
         worker = threading.Thread(
             target=self._scan_worker,
-            args=(game_region, worker_name_regions, threshold, corrections, self.scan_tick, self.active_scan_auto_area, name_area_confirm),
+            args=(game_region, worker_name_regions, threshold, corrections, self.scan_tick, self.active_scan_auto_area, name_area_confirm, active_layout),
             daemon=True,
         )
         worker.start()
@@ -2536,6 +2580,7 @@ class BattleMonitorApp:
         scan_tick: int,
         auto_area_mode: bool = False,
         name_area_confirm: Optional[Rect] = None,
+        active_layout: str = "single",
     ) -> None:
         """Capture configured name regions and OCR them off the Tk UI thread.
 
@@ -2613,7 +2658,7 @@ class BattleMonitorApp:
                         # responsive and avoids doing many slow Tesseract calls.
                         stop_slot = False
                         for source, img in variants:
-                            for attempt in self.ocr.iter_text_attempts(img):
+                            for attempt_count, attempt in enumerate(self.ocr.iter_text_attempts(img), start=1):
                                 attempts.append(attempt)
                                 if attempt.text:
                                     match = self._match_auto_area_text(attempt.text, threshold, corrections, source) if auto_area_mode else self._match_precise_text(attempt.text, threshold, corrections, source)
@@ -2630,6 +2675,9 @@ class BattleMonitorApp:
                                         if best.score >= threshold or accepted_auto_panel:
                                             stop_slot = True
                                             break
+                                if attempt_count >= LIVE_OCR_ATTEMPT_LIMIT_PER_SLOT:
+                                    stop_slot = True
+                                    break
                             if stop_slot:
                                 break
                     except Exception as exc:
@@ -2639,6 +2687,12 @@ class BattleMonitorApp:
 
                     debug_image = variants[0][1] if variants else None
                     results.append({"idx": idx, "source": result_source, "attempts": attempts, "best": best, "best_preset": best_preset, "capture_error": None, "debug_image": debug_image})
+                    best_confident = bool(best and ((best.score >= threshold) or auto_area_mode))
+                    if best_confident and self.slot_layout(idx) != active_layout:
+                        # A confirmed Pokémon from the opposite layout is enough
+                        # to switch the cards. Do not wait for stale/noisy slots
+                        # from the old layout to finish their slow no-match OCR.
+                        break
         except Exception as exc:
             worker_error = str(exc)
 
@@ -3078,8 +3132,11 @@ class BattleMonitorApp:
         # The slot label used useful vertical space but did not add much once the
         # card is already grouped by detected Pokémon. Keep only the Pokémon name
         # and optional form selector.
+        ocr_fix_row = tk.Frame(header, bg=CARD_BG)
+        ocr_fix_row.pack(anchor="e", fill="x")
+        ttk.Button(ocr_fix_row, text="OCR Fix", command=lambda s=slot_idx: self.add_ocr_fix_dialog(s), width=8).pack(side="right", anchor="e")
         title_row = tk.Frame(header, bg=CARD_BG)
-        title_row.pack(anchor="w", fill="x")
+        title_row.pack(anchor="w", fill="x", pady=(0, 2))
         tk.Label(
             title_row,
             text=f"Slot {self.slot_display_number(slot_idx)}: {summary.get('display_name', key)}",
@@ -3089,7 +3146,6 @@ class BattleMonitorApp:
             anchor="w",
         ).pack(side="left", anchor="w", fill="x", expand=True)
         self.add_form_selector(title_row, slot_idx, key, compact=True if dense or compact else False, metrics=metrics)
-        ttk.Button(title_row, text="OCR Fix", command=lambda s=slot_idx: self.add_ocr_fix_dialog(s), width=8).pack(side="left", anchor="w", padx=(6, 0))
 
         types_frame = tk.Frame(card, bg=CARD_BG)
         types_frame.pack(anchor="w", fill="x", pady=(2, 3 if dense else 6 + metrics["tier"]))
@@ -3124,9 +3180,12 @@ class BattleMonitorApp:
         card = tk.Frame(parent, bg=CARD_BG, padx=metrics["card_pad"], pady=metrics["card_pad"], highlightthickness=1, highlightbackground=BORDER)
         header = tk.Frame(card, bg=CARD_BG)
         header.pack(fill="x")
+        title_text = f"Slot {self.slot_display_number(slot_idx)}: {status}"
+        if compact:
+            title_text = f"Slot {self.slot_display_number(slot_idx)}: Unclear" if attempts else f"Slot {self.slot_display_number(slot_idx)}: Waiting"
         tk.Label(
             header,
-            text=f"Slot {self.slot_display_number(slot_idx)}: {status}",
+            text=title_text,
             bg=CARD_BG,
             fg=WHITE if has_region else YELLOW,
             font=("Segoe UI", metrics["title_font"], "bold"),
@@ -3136,7 +3195,7 @@ class BattleMonitorApp:
         message = (
             "No confident Pokémon name is visible in this slot yet."
             if has_region
-            else "Add a name crop for this slot, or switch Battle slots back to Single."
+            else "Add a name crop for this slot in Name Slots."
         )
         tk.Label(card, text=message, bg=CARD_BG, fg=MUTED, font=("Segoe UI", metrics["body_font"]), wraplength=metrics["wrap"], justify="left", anchor="w").pack(anchor="w", fill="x", pady=(8, 0))
         tk.Label(card, text=f"Latest OCR: {latest}", bg=CARD_BG, fg=TEXT if attempts else MUTED, font=("Segoe UI", metrics["body_font"]), wraplength=metrics["wrap"], justify="left", anchor="w").pack(anchor="w", fill="x", pady=(6, 0))
