@@ -1402,7 +1402,7 @@ class BattleMonitorApp:
         has_single_key = 0 in self.current_keys
         has_double_text = any(current_scan_texts.get(slot_idx) for slot_idx in (1, 2))
         has_single_text = bool(current_scan_texts.get(0))
-        if has_double_key or (not has_single_key and has_double_text):
+        if has_double_key or has_double_text:
             self.battle_slot_mode.set("double")
         elif has_single_key or has_single_text:
             self.battle_slot_mode.set("single")
@@ -2822,10 +2822,11 @@ class BattleMonitorApp:
 
         after_keys = tuple(sorted(self.current_keys.items()))
         after_layout = self.battle_slot_mode.get()
+        after_render_signature = (after_keys, tuple(self.expected_battle_slots()), after_layout)
         debug_signature = tuple(debug_lines)
         now = time.monotonic()
 
-        should_render = after_keys != before_keys or after_layout != before_layout or after_keys != self.last_rendered_keys
+        should_render = after_keys != before_keys or after_layout != before_layout or after_render_signature != self.last_rendered_keys
         # When there is no confident match, refresh the placeholder occasionally
         # with the latest OCR text/error so it does not keep saying setup is
         # incomplete while the scanner is actually running.

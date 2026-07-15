@@ -49,6 +49,7 @@ def test_battle_slot_mode_source_has_double_slots_and_slot_ocr_fix():
     assert "Slot {self.slot_display_number(slot_idx)}: {status}" in source
     assert "self.add_ocr_fix_dialog(s)" in source
     assert "program-wide and apply before fuzzy matching in every profile/game" in source
+    assert "after_render_signature != self.last_rendered_keys" in source
     assert "battle_slot_mode" in source
 
 
@@ -79,6 +80,10 @@ def test_auto_battle_layout_prefers_detected_double_slots():
     app.current_keys = {0: "pikachu"}
     app.update_auto_battle_layout({0: ["Pikachu"]})
     assert mode["value"] == "single"
+
+    app.current_keys = {0: "roselia"}
+    app.update_auto_battle_layout({0: ["Roselia"], 1: ["Volbeat"]})
+    assert mode["value"] == "double"
 
 
 def test_legacy_name_regions_migrate_to_per_game_slot_storage():
