@@ -312,7 +312,10 @@ class BattleMonitorApp:
         self.sct = mss.mss()
 
         self.game_region: Optional[Rect] = None
-        self.name_regions: List[Rect] = []  # relative to game region
+        self.single_name_region: Optional[Rect] = None
+        self.double_name_regions: List[Rect] = []
+        self.name_regions: List[Rect] = []  # active regions for saved slots
+        self.name_region_slots: List[int] = []  # internal slot ids matching name_regions: 0=single, 1/2=double
         self.running = False
         self.scan_histories: Dict[int, deque] = {}
         self.slot_miss_counts: Dict[int, int] = {}
@@ -358,6 +361,7 @@ class BattleMonitorApp:
         self.dock_on_start = tk.BooleanVar(value=True)
         self.dock_position = tk.StringVar(value="left")
         self.ultra_compact = tk.BooleanVar(value=False)
+        self.battle_slot_mode = tk.StringVar(value="single")
         self.auto_window_region = tk.BooleanVar(value=False)
         self.attached_window_title = ""
         self.window_match_text = ""
@@ -517,17 +521,21 @@ class BattleMonitorApp:
         self.game_region_button = ttk.Button(capture, text="Game Region", command=self.select_game_region)
         self.game_region_button.grid(row=0, column=1, sticky="ew", padx=(2, 0), pady=2)
         self.add_tooltip(self.game_region_button, "Manually drag around the full emulator or game window.")
-        self.add_name_button = ttk.Button(capture, text="Add Name", command=self.add_name_region)
-        self.add_name_button.grid(row=1, column=0, sticky="ew", padx=(0, 2), pady=2)
-        self.add_tooltip(self.add_name_button, "Recommended: add a tight OCR crop around each opponent name.")
-        self.clear_names_button = ttk.Button(capture, text="Clear Names", command=self.clear_name_regions)
-        self.clear_names_button.grid(row=1, column=1, sticky="ew", padx=(2, 0), pady=2)
-        self.add_tooltip(self.clear_names_button, "Remove all precise name crops and reset current detections.")
+        ttk.Label(capture, text="Name Slots", style="App.TLabel").grid(row=1, column=0, columnspan=2, sticky="w", pady=(6, 1))
+        self.single_name_button = ttk.Button(capture, text="Singles", command=self.select_single_name_slot)
+        self.single_name_button.grid(row=2, column=0, sticky="ew", padx=(0, 2), pady=2)
+        self.add_tooltip(self.single_name_button, "Select or overwrite the single-battle opponent name slot for this game profile.")
+        self.double_names_button = ttk.Button(capture, text="Doubles", command=self.select_double_name_slots)
+        self.double_names_button.grid(row=2, column=1, sticky="ew", padx=(2, 0), pady=2)
+        self.add_tooltip(self.double_names_button, "Select or overwrite double-battle Slot 1, then Slot 2, for this game profile.")
+        self.clear_names_button = ttk.Button(capture, text="Clear Slots", command=self.clear_name_regions)
+        self.clear_names_button.grid(row=3, column=0, columnspan=2, sticky="ew", pady=2)
+        self.add_tooltip(self.clear_names_button, "Clear all saved single and double name slots for this game profile.")
         self.preview_toggle_button = ttk.Button(capture, textvariable=self.preview_button_text, command=self.toggle_preview)
-        self.preview_toggle_button.grid(row=2, column=0, sticky="ew", padx=(0, 2), pady=2)
+        self.preview_toggle_button.grid(row=4, column=0, sticky="ew", padx=(0, 2), pady=2)
         self.add_tooltip(self.preview_toggle_button, "Show or hide a preview of the selected game region and OCR boxes.")
         self.guided_setup_button = ttk.Button(capture, text="Guided Setup", command=self.start_setup_tour)
-        self.guided_setup_button.grid(row=2, column=1, sticky="ew", padx=(2, 0), pady=2)
+        self.guided_setup_button.grid(row=4, column=1, sticky="ew", padx=(2, 0), pady=2)
         self.add_tooltip(self.guided_setup_button, "Walk through window selection, tight name zones, docking, profiles, and tracking.")
 
         row += 1
@@ -1123,41 +1131,46 @@ class BattleMonitorApp:
         self.update_preview()
         self.render_detected(self.last_debug_lines, force=True)
 
-    def add_name_region(self) -> None:
+    def select_relative_name_region(self, title: str) -> Optional[Rect]:
         if not self.game_region:
-            messagebox.showinfo("Select game region first", "Select the full game region before adding name regions.")
-            return
-        if len(self.name_regions) >= MAX_NAME_REGIONS:
-            messagebox.showinfo("Name region limit", f"Up to {MAX_NAME_REGIONS} precise name regions can be added. Use Clear Names to reset them.")
-            return
+            messagebox.showinfo("Select game region first", "Select the full game region before adding name slots.")
+            return None
         self.root.withdraw()
-        rect = select_screen_region(self.root, "Select a Pokémon name box region")
+        rect = select_screen_region(self.root, title)
         self.root.deiconify()
         if not rect:
-            self.status_var.set("Name region selection cancelled.")
-            return
+            return None
         rel = Rect(rect.x - self.game_region.x, rect.y - self.game_region.y, rect.w, rect.h).normalized()
-        # Clip to the game region.
-        rel = Rect(
+        return Rect(
             max(0, min(rel.x, self.game_region.w - 1)),
             max(0, min(rel.y, self.game_region.h - 1)),
             max(1, min(rel.w, self.game_region.w - rel.x)),
             max(1, min(rel.h, self.game_region.h - rel.y)),
         )
-        # If only the auto top-left region exists, replace it with the user's precise region.
-        auto = self.automatic_name_scan_area()
-        if len(self.name_regions) == 1 and self.name_regions[0] == auto:
-            self.name_regions = []
-        self.name_regions.append(rel)
-        self.name_regions = sorted_name_regions(self.name_regions)
-        slot_number = self.name_regions.index(rel) + 1
-        if self.name_scan_area:
-            self.status_var.set(
-                f"Added name region as Slot {slot_number}/{MAX_NAME_REGIONS}: {rel.w}×{rel.h} at +{rel.x},+{rel.y}. "
-                "Name Area will confirm whether that slot is visible."
-            )
-        else:
-            self.status_var.set(f"Added name region as Slot {slot_number}/{MAX_NAME_REGIONS}: {rel.w}×{rel.h} at +{rel.x},+{rel.y}.")
+
+    def sync_active_name_regions(self) -> None:
+        # All saved name slots stay scan-active. The scan result decides whether
+        # the UI should present the single card or the two double-battle cards.
+        regions: List[Rect] = []
+        slots: List[int] = []
+        if self.single_name_region:
+            regions.append(self.single_name_region)
+            slots.append(0)
+        for offset, region in enumerate(self.double_name_regions[:2], start=1):
+            regions.append(region)
+            slots.append(offset)
+        self.name_regions = regions
+        self.name_region_slots = slots
+
+    def slot_display_number(self, slot_idx: int) -> int:
+        # Internal slot 0 is the Singles crop. Internal slots 1/2 are Doubles
+        # Slot 1/2, so display double slots as 1/2 instead of 2/3.
+        return slot_idx if slot_idx in {1, 2} else 1
+
+    def slot_layout(self, slot_idx: int) -> str:
+        return "double" if slot_idx in {1, 2} else "single"
+
+    def reset_slot_detection_state(self) -> None:
         self.current_keys.clear()
         self.slot_form_overrides.clear()
         self.scan_histories.clear()
@@ -1165,19 +1178,45 @@ class BattleMonitorApp:
         self.slot_miss_counts.clear()
         self.auto_slot_pending.clear()
         self.last_rendered_keys = tuple()
+
+    def select_single_name_slot(self) -> None:
+        rel = self.select_relative_name_region("Select the single-battle opponent name box")
+        if not rel:
+            self.status_var.set("Single name slot selection cancelled.")
+            return
+        self.single_name_region = rel
+        self.sync_active_name_regions()
+        self.reset_slot_detection_state()
+        self.status_var.set(f"Single name slot saved: {rel.w}×{rel.h} at +{rel.x},+{rel.y}. Double slots stay saved and scan-active in this profile.")
         self.update_preview()
         self.render_detected(self.last_debug_lines, force=True)
 
+    def select_double_name_slots(self) -> None:
+        first = self.select_relative_name_region("Select double-battle Slot 1 name box")
+        if not first:
+            self.status_var.set("Double Slot 1 selection cancelled.")
+            return
+        second = self.select_relative_name_region("Select double-battle Slot 2 name box")
+        if not second:
+            self.status_var.set("Double Slot 2 selection cancelled. Previous double slots were not changed.")
+            return
+        self.double_name_regions = [first, second]
+        self.sync_active_name_regions()
+        self.reset_slot_detection_state()
+        self.status_var.set("Double name slots saved: Slot 1 and Slot 2. Single slot stays saved and scan-active in this profile.")
+        self.update_preview()
+        self.render_detected(self.last_debug_lines, force=True)
+
+    def add_name_region(self) -> None:
+        # Backward-compatible command target for older guided-tour/profile code.
+        self.select_single_name_slot() if self.battle_slot_mode.get() == "single" else self.select_double_name_slots()
+
     def clear_name_regions(self) -> None:
-        self.name_regions.clear()
-        self.current_keys.clear()
-        self.slot_form_overrides.clear()
-        self.scan_histories.clear()
-        self.ocr_stabilizer.clear()
-        self.slot_miss_counts.clear()
-        self.auto_slot_pending.clear()
-        self.last_rendered_keys = tuple()
-        self.status_var.set("Name regions cleared. Auto top-left nameplate scan will be used.")
+        self.single_name_region = None
+        self.double_name_regions = []
+        self.sync_active_name_regions()
+        self.reset_slot_detection_state()
+        self.status_var.set("All single and double name slots cleared. Auto top-left nameplate scan will be used until slots are set.")
         self.update_preview()
         self.render_detected(self.last_debug_lines, force=True)
 
@@ -1241,9 +1280,21 @@ class BattleMonitorApp:
         regions are present. When neither is configured, use the automatic
         top-left battle area so first-time setup can start from Window Region.
         """
+        self.sync_active_name_regions()
         if self.name_regions:
-            return sorted_name_regions([Rect(r.x, r.y, r.w, r.h) for r in self.name_regions])
+            return [Rect(r.x, r.y, r.w, r.h) for r in self.name_regions]
         return self.derive_regions_from_name_area()
+
+    def active_name_region_labels(self) -> List[str]:
+        self.sync_active_name_regions()
+        labels: List[str] = []
+        for slot_idx in self.name_region_slots:
+            labels.append("Single" if slot_idx == 0 else f"Double {slot_idx}")
+        return labels
+
+    def has_configured_region_for_slot(self, slot_idx: int) -> bool:
+        self.sync_active_name_regions()
+        return slot_idx in self.name_region_slots
 
     def has_tracking_regions(self) -> bool:
         return bool(self.game_region and self.effective_name_regions())
@@ -1269,9 +1320,12 @@ class BattleMonitorApp:
             if rel:
                 draw.rectangle([rel.x, rel.y, rel.x + rel.w, rel.y + rel.h], outline="cyan", width=2)
                 draw.text((rel.x + 4, rel.y + 4), "Auto Nameplates", fill="cyan")
-        for i, rel in enumerate(sorted_name_regions(self.name_regions), start=1):
+        self.sync_active_name_regions()
+        labels = self.active_name_region_labels()
+        for i, rel in enumerate(self.name_regions, start=1):
+            label = labels[i - 1] if i - 1 < len(labels) else f"Name {i}"
             draw.rectangle([rel.x, rel.y, rel.x + rel.w, rel.y + rel.h], outline="red", width=3)
-            draw.text((rel.x + 4, rel.y + 4), f"Name {i}", fill="red")
+            draw.text((rel.x + 4, rel.y + 4), label, fill="red")
         if self.name_regions and self.name_scan_area:
             rel = self.name_scan_area
             draw.text((rel.x + 4, rel.y + max(16, rel.h - 18)), "Confirms precise zones", fill="orange")
@@ -1335,6 +1389,37 @@ class BattleMonitorApp:
         if not self.current_keys:
             self.render_detected(self.last_debug_lines, force=True)
         self.root.after(50, self.scan_once)
+
+    def expected_battle_slots(self) -> List[int]:
+        layout = (self.battle_slot_mode.get() or "single").lower()
+        if layout == "double":
+            return [1, 2]
+        return [0]
+
+    def update_auto_battle_layout(self, current_scan_texts: Optional[Dict[int, List[str]]] = None) -> None:
+        current_scan_texts = current_scan_texts or {}
+        has_double_key = any(slot_idx in self.current_keys for slot_idx in (1, 2))
+        has_single_key = 0 in self.current_keys
+        has_double_text = any(current_scan_texts.get(slot_idx) for slot_idx in (1, 2))
+        has_single_text = bool(current_scan_texts.get(0))
+        if has_double_key or (not has_single_key and has_double_text):
+            self.battle_slot_mode.set("double")
+        elif has_single_key or has_single_text:
+            self.battle_slot_mode.set("single")
+        elif self.double_name_regions and not self.single_name_region:
+            self.battle_slot_mode.set("double")
+        else:
+            self.battle_slot_mode.set("single")
+
+    def on_battle_slot_mode_changed(self) -> None:
+        mode = (self.battle_slot_mode.get() or "single").lower()
+        if mode not in {"single", "double"}:
+            mode = "single"
+            self.battle_slot_mode.set(mode)
+        self.sync_active_name_regions()
+        self.last_rendered_keys = tuple()
+        self.render_detected(self.last_debug_lines, preserve_scroll=True, force=True)
+        self.status_var.set(f"Detected battle layout: {mode.title()}.")
 
     def set_and_dock(self, position: str) -> None:
         self.dock_position.set(position)
@@ -1666,9 +1751,10 @@ class BattleMonitorApp:
         self.active_scan_started_at = time.monotonic()
         self.scan_status_var.set("OCR scan running…")
 
+        worker_name_regions = list(zip(self.name_region_slots, name_regions)) if self.name_regions else name_regions
         worker = threading.Thread(
             target=self._scan_worker,
-            args=(game_region, name_regions, threshold, corrections, self.scan_tick, self.active_scan_auto_area, name_area_confirm),
+            args=(game_region, worker_name_regions, threshold, corrections, self.scan_tick, self.active_scan_auto_area, name_area_confirm),
             daemon=True,
         )
         worker.start()
@@ -2493,7 +2579,11 @@ class BattleMonitorApp:
                             Rect(name_area_confirm.x + panel.x, name_area_confirm.y + panel.y, panel.w, panel.h)
                             for panel in self.detect_nameplate_regions_from_image(area_img)
                         ]
-                    for idx, rel in enumerate(name_regions):
+                    for fallback_idx, item in enumerate(name_regions):
+                        if isinstance(item, tuple):
+                            idx, rel = item
+                        else:
+                            idx, rel = fallback_idx, item
                         if confirmed_panels is not None:
                             if not confirmed_panels:
                                 source = "precise_unconfirmed_area"
@@ -2564,8 +2654,8 @@ class BattleMonitorApp:
         cleared = slot_idx in self.current_keys
         self.current_keys.pop(slot_idx, None)
         self.slot_form_overrides.pop(slot_idx, None)
-        self.last_slot_attempt_texts.pop(slot_idx, None)
-        self.last_slot_raw_texts.pop(slot_idx, None)
+        # Keep the latest slot OCR text available for the visible slot-specific
+        # OCR Fix button after a stale card clears to "Name is unclear".
         self.ocr_stabilizer.clear_slot(slot_idx)
         return cleared
 
@@ -2596,6 +2686,7 @@ class BattleMonitorApp:
 
         debug_lines: List[str] = []
         before_keys = tuple(sorted(self.current_keys.items()))
+        before_layout = self.battle_slot_mode.get()
         seen_result_slots = set()
         current_scan_texts: Dict[int, List[str]] = {}
 
@@ -2713,6 +2804,8 @@ class BattleMonitorApp:
                         )
                         break
 
+        self.update_auto_battle_layout(current_scan_texts)
+
         if self.current_keys:
             names = []
             for slot_idx, key in sorted(self.current_keys.items()):
@@ -2728,10 +2821,11 @@ class BattleMonitorApp:
             self.scan_status_var.set("Waiting for Pokémon" + ((" — " + " | ".join(raw_bits[:2])) if raw_bits else ""))
 
         after_keys = tuple(sorted(self.current_keys.items()))
+        after_layout = self.battle_slot_mode.get()
         debug_signature = tuple(debug_lines)
         now = time.monotonic()
 
-        should_render = after_keys != before_keys or after_keys != self.last_rendered_keys
+        should_render = after_keys != before_keys or after_layout != before_layout or after_keys != self.last_rendered_keys
         # When there is no confident match, refresh the placeholder occasionally
         # with the latest OCR text/error so it does not keep saying setup is
         # incomplete while the scanner is actually running.
@@ -2864,32 +2958,35 @@ class BattleMonitorApp:
 
     def render_detected(self, debug_lines: List[str], preserve_scroll: bool = True, force: bool = False) -> None:
         rendered_keys = tuple(sorted(self.current_keys.items()))
-        if not force and rendered_keys == self.last_rendered_keys and not self.show_debug.get():
+        rendered_slots = tuple(self.expected_battle_slots())
+        render_signature = (rendered_keys, rendered_slots, self.battle_slot_mode.get())
+        if not force and render_signature == self.last_rendered_keys and not self.show_debug.get():
             return
         scroll_pos = self.info_canvas.yview()[0] if preserve_scroll else 0
         self.clear_cards()
         keys = [(idx, self.current_keys[idx]) for idx in sorted(self.current_keys)]
-        if not keys:
-            self.render_idle_message()
-        else:
-            self.reset_info_canvas_width()
-            available_width = max(1, self.info_canvas.winfo_width())
-            two_column_min = 640 if self.ultra_compact.get() else 760
-            columns = 2 if len(keys) >= 2 and available_width >= two_column_min else 1
-            for c in range(columns):
-                self.card_container.columnconfigure(c, weight=1, uniform="battle_cards")
-            for pos, (idx, key) in enumerate(keys):
-                row = pos // columns
-                col = pos % columns
-                card = self.create_pokemon_card(self.card_container, idx, key, compact=(columns == 2))
-                card.grid(row=row, column=col, sticky="new", padx=3, pady=3)
+        slots = self.expected_battle_slots()
+        self.reset_info_canvas_width()
+        available_width = max(1, self.info_canvas.winfo_width())
+        two_column_min = 640 if self.ultra_compact.get() else 760
+        columns = 2 if len(slots) >= 2 and available_width >= two_column_min else 1
+        for c in range(columns):
+            self.card_container.columnconfigure(c, weight=1, uniform="battle_cards")
+        for pos, slot_idx in enumerate(slots):
+            row = pos // columns
+            col = pos % columns
+            if slot_idx in self.current_keys:
+                card = self.create_pokemon_card(self.card_container, slot_idx, self.current_keys[slot_idx], compact=(columns == 2))
+            else:
+                card = self.create_unclear_slot_card(self.card_container, slot_idx, compact=(columns == 2))
+            card.grid(row=row, column=col, sticky="new", padx=3, pady=3)
 
         if self.show_debug.get():
             debug = tk.Frame(self.card_container, bg=CARD_BG, padx=10, pady=8, highlightthickness=1, highlightbackground=BORDER)
             debug_width = max(1, self.info_canvas.winfo_width())
             debug_two_column_min = 640 if self.ultra_compact.get() else 760
-            active_columns = 2 if len(keys) >= 2 and debug_width >= debug_two_column_min else 1
-            next_row = (len(keys) + active_columns - 1) // active_columns + 1
+            active_columns = 2 if len(slots) >= 2 and debug_width >= debug_two_column_min else 1
+            next_row = (len(slots) + active_columns - 1) // active_columns + 1
             debug.grid(row=next_row, column=0, columnspan=active_columns, sticky="ew", padx=3, pady=(6, 3))
             tk.Label(debug, text="OCR Debug", bg=CARD_BG, fg=WHITE, font=("Segoe UI", 10, "bold")).pack(anchor="w")
             tk.Label(
@@ -2902,7 +2999,7 @@ class BattleMonitorApp:
                 anchor="w",
                 wraplength=max(320, self.info_canvas.winfo_width() - 80),
             ).pack(anchor="w", fill="x", pady=(4, 0))
-        self.last_rendered_keys = rendered_keys
+        self.last_rendered_keys = render_signature
         if self.show_debug.get():
             self.last_debug_signature = tuple(debug_lines)
             self.last_debug_render_time = time.monotonic()
@@ -2977,13 +3074,14 @@ class BattleMonitorApp:
         title_row.pack(anchor="w", fill="x")
         tk.Label(
             title_row,
-            text=summary.get("display_name", key),
+            text=f"Slot {self.slot_display_number(slot_idx)}: {summary.get('display_name', key)}",
             bg=CARD_BG,
             fg=WHITE,
             font=("Segoe UI", metrics["title_font"], "bold"),
             anchor="w",
         ).pack(side="left", anchor="w", fill="x", expand=True)
         self.add_form_selector(title_row, slot_idx, key, compact=True if dense or compact else False, metrics=metrics)
+        ttk.Button(title_row, text="OCR Fix", command=lambda s=slot_idx: self.add_ocr_fix_dialog(s), width=8).pack(side="left", anchor="w", padx=(6, 0))
 
         types_frame = tk.Frame(card, bg=CARD_BG)
         types_frame.pack(anchor="w", fill="x", pady=(2, 3 if dense else 6 + metrics["tier"]))
@@ -3005,6 +3103,37 @@ class BattleMonitorApp:
             self.add_collapsible_section(card, "Type Effectiveness", "effectiveness", lambda body: self.add_effectiveness_content(body, summary.get("effectiveness", {}), wrap, metrics=metrics), metrics=metrics)
             self.add_separator(card)
             self.add_collapsible_section(card, "Abilities", "abilities", lambda body: self.add_abilities_content(body, summary.get("abilities", []), wrap, metrics=metrics), metrics=metrics)
+        return card
+
+    def create_unclear_slot_card(self, parent: tk.Widget, slot_idx: int, compact: bool = False) -> tk.Frame:
+        metrics = self.card_layout_metrics(compact=compact, dense=bool(self.ultra_compact.get()))
+        attempts = [v for v in self.last_slot_attempt_texts.get(slot_idx, []) if v]
+        latest = attempts[0] if attempts else "no readable text yet"
+        has_region = self.has_configured_region_for_slot(slot_idx)
+        status = "Name is unclear" if attempts else "Waiting for name"
+        if not has_region:
+            status = "Name region not set"
+        card = tk.Frame(parent, bg=CARD_BG, padx=metrics["card_pad"], pady=metrics["card_pad"], highlightthickness=1, highlightbackground=BORDER)
+        header = tk.Frame(card, bg=CARD_BG)
+        header.pack(fill="x")
+        tk.Label(
+            header,
+            text=f"Slot {self.slot_display_number(slot_idx)}: {status}",
+            bg=CARD_BG,
+            fg=WHITE if has_region else YELLOW,
+            font=("Segoe UI", metrics["title_font"], "bold"),
+            anchor="w",
+        ).pack(side="left", anchor="w", fill="x", expand=True)
+        ttk.Button(header, text="OCR Fix", command=lambda s=slot_idx: self.add_ocr_fix_dialog(s), width=8).pack(side="left", anchor="e", padx=(6, 0))
+        message = (
+            "No confident Pokémon name is visible in this slot yet."
+            if has_region
+            else "Add a name crop for this slot, or switch Battle slots back to Single."
+        )
+        tk.Label(card, text=message, bg=CARD_BG, fg=MUTED, font=("Segoe UI", metrics["body_font"]), wraplength=metrics["wrap"], justify="left", anchor="w").pack(anchor="w", fill="x", pady=(8, 0))
+        tk.Label(card, text=f"Latest OCR: {latest}", bg=CARD_BG, fg=TEXT if attempts else MUTED, font=("Segoe UI", metrics["body_font"]), wraplength=metrics["wrap"], justify="left", anchor="w").pack(anchor="w", fill="x", pady=(6, 0))
+        if attempts:
+            tk.Label(card, text="Use OCR Fix if that text should map to a Pokémon name.", bg=CARD_BG, fg=MUTED, font=("Segoe UI", max(8, metrics["body_font"] - 1)), wraplength=metrics["wrap"], justify="left", anchor="w").pack(anchor="w", fill="x", pady=(4, 0))
         return card
 
 
@@ -3206,11 +3335,11 @@ class BattleMonitorApp:
                 "complete": lambda: self.game_region is not None,
             },
             {
-                "target": self.add_name_button,
-                "title": "2. Recommended name zones",
-                "body": "The app can auto-scan the top-left battle area, but tight Add Name zones are recommended for accuracy.",
-                "action_label": "Add Name Region",
-                "action": self.add_name_region,
+                "target": self.single_name_button,
+                "title": "2. Recommended name slots",
+                "body": "Use Singles for the one-opponent name box, or Doubles to select Slot 1 and Slot 2. All saved slots stay active; the scan decides whether to show one single card or two double cards.",
+                "action_label": "Set Single Slot",
+                "action": self.select_single_name_slot,
                 "complete": self.has_any_name_tracking_region,
             },
             {
@@ -3263,6 +3392,7 @@ class BattleMonitorApp:
         return region == auto
 
     def has_precise_name_regions(self) -> bool:
+        self.sync_active_name_regions()
         if not self.game_region or not self.name_regions:
             return False
         return any(not self.is_auto_name_region(r) for r in self.name_regions)
@@ -3272,8 +3402,15 @@ class BattleMonitorApp:
 
     def setup_status_summary(self) -> str:
         region = "game region ready" if self.game_region else "no game region yet"
-        if self.name_regions:
-            names = f"{len(self.name_regions)} precise name region(s)"
+        self.sync_active_name_regions()
+        single_saved = bool(self.single_name_region)
+        double_count = len(self.double_name_regions[:2])
+        if single_saved and double_count:
+            names = f"single + double slots {double_count}/2 saved"
+        elif single_saved:
+            names = "single slot saved"
+        elif double_count:
+            names = f"double slots {double_count}/2 saved"
         else:
             names = "auto top-left nameplate scan"
         ocr = "OCR ready" if self.ocr.available else "OCR not ready"
@@ -3646,12 +3783,19 @@ class BattleMonitorApp:
                     lines.append("  Tesseract best: no OCR text")
         return lines
 
-    def add_ocr_fix_dialog(self) -> None:
+    def add_ocr_fix_dialog(self, slot_idx: Optional[int] = None) -> None:
         recent_items = []
-        for slot, texts in sorted(self.last_slot_attempt_texts.items()):
+        source_items = self.last_slot_attempt_texts.items()
+        if slot_idx is not None:
+            source_items = [(slot_idx, self.last_slot_attempt_texts.get(slot_idx, []))]
+        for slot, texts in sorted(source_items):
             for text in texts[:3]:
                 if text and text not in [item[1] for item in recent_items]:
-                    recent_items.append((slot + 1, text))
+                    recent_items.append((self.slot_display_number(slot), text))
+        if slot_idx is not None and not recent_items:
+            raw = self.last_slot_raw_texts.get(slot_idx, "")
+            if raw:
+                recent_items.append((self.slot_display_number(slot_idx), raw))
         default_raw = recent_items[0][1] if recent_items else ""
 
         dialog = tk.Toplevel(self.root)
@@ -3661,8 +3805,9 @@ class BattleMonitorApp:
         dialog.grab_set()
         dialog.resizable(False, False)
 
-        tk.Label(dialog, text="Teach the monitor a bad OCR read", bg=PAGE_BG, fg=WHITE, font=("Segoe UI", 11, "bold")).grid(row=0, column=0, columnspan=2, sticky="w", padx=12, pady=(12, 4))
-        tk.Label(dialog, text="Example: map LURANT1S or Lurantls to Lurantis. Corrections apply before fuzzy matching.", bg=PAGE_BG, fg=MUTED, font=("Segoe UI", 8), wraplength=440, justify="left").grid(row=1, column=0, columnspan=2, sticky="w", padx=12, pady=(0, 10))
+        title = f"Teach Slot {self.slot_display_number(slot_idx)} OCR" if slot_idx is not None else "Teach the monitor a bad OCR read"
+        tk.Label(dialog, text=title, bg=PAGE_BG, fg=WHITE, font=("Segoe UI", 11, "bold")).grid(row=0, column=0, columnspan=2, sticky="w", padx=12, pady=(12, 4))
+        tk.Label(dialog, text="Example: map LURANT1S or Lurantls to Lurantis. Corrections are program-wide and apply before fuzzy matching in every profile/game.", bg=PAGE_BG, fg=MUTED, font=("Segoe UI", 8), wraplength=440, justify="left").grid(row=1, column=0, columnspan=2, sticky="w", padx=12, pady=(0, 10))
 
         tk.Label(dialog, text="OCR text", bg=PAGE_BG, fg=TEXT, font=("Segoe UI", 9)).grid(row=2, column=0, sticky="w", padx=12, pady=4)
         raw_var = tk.StringVar(value=default_raw)
@@ -3763,9 +3908,12 @@ class BattleMonitorApp:
         dialog.wait_window()
 
     def profile_payload(self) -> dict:
+        self.sync_active_name_regions()
         return {
             "game_region": self.game_region.to_dict() if self.game_region else None,
-            "name_regions": [r.to_dict() for r in sorted_name_regions(self.name_regions)],
+            "name_regions": [r.to_dict() for r in self.name_regions],
+            "single_name_region": self.single_name_region.to_dict() if self.single_name_region else None,
+            "double_name_regions": [r.to_dict() for r in self.double_name_regions[:2]],
             "name_scan_area": None,
             "threshold": int(float(self.threshold_var.get())),
             "preview_visible": bool(self.preview_visible.get()),
@@ -3773,6 +3921,7 @@ class BattleMonitorApp:
             "dock_on_start": bool(self.dock_on_start.get()),
             "dock_position": self.dock_position.get(),
             "ultra_compact": bool(self.ultra_compact.get()),
+            "battle_slot_mode": self.battle_slot_mode.get(),
             "auto_window_region": bool(self.auto_window_region.get()),
             "attached_window_title": self.attached_window_title,
             "window_match_text": self.window_match_text,
@@ -3782,7 +3931,17 @@ class BattleMonitorApp:
     def apply_profile_payload(self, payload: dict) -> None:
         game = payload.get("game_region")
         self.game_region = Rect.from_dict(game) if game else None
-        self.name_regions = sorted_name_regions([Rect.from_dict(r) for r in payload.get("name_regions", [])])
+        legacy_name_regions = [Rect.from_dict(r) for r in payload.get("name_regions", [])]
+        single_region = payload.get("single_name_region")
+        double_regions = payload.get("double_name_regions")
+        self.single_name_region = Rect.from_dict(single_region) if single_region else None
+        self.double_name_regions = [Rect.from_dict(r) for r in (double_regions or [])][:2]
+        if not self.single_name_region and not self.double_name_regions and legacy_name_regions:
+            legacy_sorted = sorted_name_regions(legacy_name_regions)
+            if len(legacy_sorted) >= 2:
+                self.double_name_regions = legacy_sorted[:2]
+            else:
+                self.single_name_region = legacy_sorted[0]
         # Name Area was removed from the UI. Keep the automatic top-left fallback,
         # but ignore old profile name_scan_area values so saved profiles do not
         # silently re-enable the broad custom mode.
@@ -3795,6 +3954,9 @@ class BattleMonitorApp:
             self.dock_position.set(payload.get("dock_position"))
         if "ultra_compact" in payload:
             self.ultra_compact.set(bool(payload.get("ultra_compact")))
+        mode = str(payload.get("battle_slot_mode") or "single").lower()
+        self.battle_slot_mode.set(mode if mode in {"single", "double"} else "single")
+        self.sync_active_name_regions()
         if "auto_window_region" in payload:
             self.auto_window_region.set(bool(payload.get("auto_window_region")))
         self.attached_window_title = payload.get("attached_window_title", "") or ""
