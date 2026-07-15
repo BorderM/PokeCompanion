@@ -1406,10 +1406,6 @@ class BattleMonitorApp:
             self.battle_slot_mode.set("double")
         elif has_single_key or has_single_text:
             self.battle_slot_mode.set("single")
-        elif self.double_name_regions and not self.single_name_region:
-            self.battle_slot_mode.set("double")
-        else:
-            self.battle_slot_mode.set("single")
 
     def on_battle_slot_mode_changed(self) -> None:
         mode = (self.battle_slot_mode.get() or "single").lower()
