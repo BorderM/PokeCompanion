@@ -312,7 +312,9 @@ class BattleMonitorApp:
         self.sct = mss.mss()
 
         self.game_region: Optional[Rect] = None
-        self.name_regions: List[Rect] = []  # relative to game region
+        self.single_name_region: Optional[Rect] = None
+        self.double_name_regions: List[Rect] = []
+        self.name_regions: List[Rect] = []  # active regions for the selected single/double mode
         self.running = False
         self.scan_histories: Dict[int, deque] = {}
         self.slot_miss_counts: Dict[int, int] = {}
@@ -518,13 +520,16 @@ class BattleMonitorApp:
         self.game_region_button = ttk.Button(capture, text="Game Region", command=self.select_game_region)
         self.game_region_button.grid(row=0, column=1, sticky="ew", padx=(2, 0), pady=2)
         self.add_tooltip(self.game_region_button, "Manually drag around the full emulator or game window.")
-        self.add_name_button = ttk.Button(capture, text="Add Name", command=self.add_name_region)
-        self.add_name_button.grid(row=1, column=0, sticky="ew", padx=(0, 2), pady=2)
-        self.add_tooltip(self.add_name_button, "Recommended: add a tight OCR crop around each opponent name.")
-        self.clear_names_button = ttk.Button(capture, text="Clear Names", command=self.clear_name_regions)
-        self.clear_names_button.grid(row=1, column=1, sticky="ew", padx=(2, 0), pady=2)
-        self.add_tooltip(self.clear_names_button, "Remove all precise name crops and reset current detections.")
-        ttk.Label(capture, text="Battle slots", style="App.TLabel").grid(row=2, column=0, sticky="w", pady=(6, 1))
+        ttk.Label(capture, text="Name Slots", style="App.TLabel").grid(row=1, column=0, columnspan=2, sticky="w", pady=(6, 1))
+        self.single_name_button = ttk.Button(capture, text="Singles", command=self.select_single_name_slot)
+        self.single_name_button.grid(row=2, column=0, sticky="ew", padx=(0, 2), pady=2)
+        self.add_tooltip(self.single_name_button, "Select or overwrite the single-battle opponent name slot for this game profile.")
+        self.double_names_button = ttk.Button(capture, text="Doubles", command=self.select_double_name_slots)
+        self.double_names_button.grid(row=2, column=1, sticky="ew", padx=(2, 0), pady=2)
+        self.add_tooltip(self.double_names_button, "Select or overwrite double-battle Slot 1, then Slot 2, for this game profile.")
+        self.clear_names_button = ttk.Button(capture, text="Clear Active", command=self.clear_name_regions)
+        self.clear_names_button.grid(row=3, column=0, sticky="ew", padx=(0, 2), pady=2)
+        self.add_tooltip(self.clear_names_button, "Clear the currently selected single/double name-slot setup.")
         self.battle_slot_mode_dropdown = ttk.Combobox(
             capture,
             textvariable=self.battle_slot_mode,
@@ -532,14 +537,14 @@ class BattleMonitorApp:
             state="readonly",
             width=10,
         )
-        self.battle_slot_mode_dropdown.grid(row=2, column=1, sticky="ew", padx=(2, 0), pady=(6, 2))
+        self.battle_slot_mode_dropdown.grid(row=3, column=1, sticky="ew", padx=(2, 0), pady=2)
         self.battle_slot_mode_dropdown.bind("<<ComboboxSelected>>", lambda _event: self.on_battle_slot_mode_changed())
-        self.add_tooltip(self.battle_slot_mode_dropdown, "Single shows one opponent slot. Double keeps two slot panels visible and tracks unclear reads per slot.")
+        self.add_tooltip(self.battle_slot_mode_dropdown, "Choose which saved name-slot setup is active: single or double.")
         self.preview_toggle_button = ttk.Button(capture, textvariable=self.preview_button_text, command=self.toggle_preview)
-        self.preview_toggle_button.grid(row=3, column=0, sticky="ew", padx=(0, 2), pady=2)
+        self.preview_toggle_button.grid(row=4, column=0, sticky="ew", padx=(0, 2), pady=2)
         self.add_tooltip(self.preview_toggle_button, "Show or hide a preview of the selected game region and OCR boxes.")
         self.guided_setup_button = ttk.Button(capture, text="Guided Setup", command=self.start_setup_tour)
-        self.guided_setup_button.grid(row=3, column=1, sticky="ew", padx=(2, 0), pady=2)
+        self.guided_setup_button.grid(row=4, column=1, sticky="ew", padx=(2, 0), pady=2)
         self.add_tooltip(self.guided_setup_button, "Walk through window selection, tight name zones, docking, profiles, and tracking.")
 
         row += 1
@@ -1135,41 +1140,31 @@ class BattleMonitorApp:
         self.update_preview()
         self.render_detected(self.last_debug_lines, force=True)
 
-    def add_name_region(self) -> None:
+    def select_relative_name_region(self, title: str) -> Optional[Rect]:
         if not self.game_region:
-            messagebox.showinfo("Select game region first", "Select the full game region before adding name regions.")
-            return
-        if len(self.name_regions) >= MAX_NAME_REGIONS:
-            messagebox.showinfo("Name region limit", f"Up to {MAX_NAME_REGIONS} precise name regions can be added. Use Clear Names to reset them.")
-            return
+            messagebox.showinfo("Select game region first", "Select the full game region before adding name slots.")
+            return None
         self.root.withdraw()
-        rect = select_screen_region(self.root, "Select a Pokémon name box region")
+        rect = select_screen_region(self.root, title)
         self.root.deiconify()
         if not rect:
-            self.status_var.set("Name region selection cancelled.")
-            return
+            return None
         rel = Rect(rect.x - self.game_region.x, rect.y - self.game_region.y, rect.w, rect.h).normalized()
-        # Clip to the game region.
-        rel = Rect(
+        return Rect(
             max(0, min(rel.x, self.game_region.w - 1)),
             max(0, min(rel.y, self.game_region.h - 1)),
             max(1, min(rel.w, self.game_region.w - rel.x)),
             max(1, min(rel.h, self.game_region.h - rel.y)),
         )
-        # If only the auto top-left region exists, replace it with the user's precise region.
-        auto = self.automatic_name_scan_area()
-        if len(self.name_regions) == 1 and self.name_regions[0] == auto:
-            self.name_regions = []
-        self.name_regions.append(rel)
-        self.name_regions = sorted_name_regions(self.name_regions)
-        slot_number = self.name_regions.index(rel) + 1
-        if self.name_scan_area:
-            self.status_var.set(
-                f"Added name region as Slot {slot_number}/{MAX_NAME_REGIONS}: {rel.w}×{rel.h} at +{rel.x},+{rel.y}. "
-                "Name Area will confirm whether that slot is visible."
-            )
+
+    def sync_active_name_regions(self) -> None:
+        mode = (self.battle_slot_mode.get() or "single").lower()
+        if mode == "double":
+            self.name_regions = [r for r in self.double_name_regions[:2]]
         else:
-            self.status_var.set(f"Added name region as Slot {slot_number}/{MAX_NAME_REGIONS}: {rel.w}×{rel.h} at +{rel.x},+{rel.y}.")
+            self.name_regions = [self.single_name_region] if self.single_name_region else []
+
+    def reset_slot_detection_state(self) -> None:
         self.current_keys.clear()
         self.slot_form_overrides.clear()
         self.scan_histories.clear()
@@ -1177,19 +1172,52 @@ class BattleMonitorApp:
         self.slot_miss_counts.clear()
         self.auto_slot_pending.clear()
         self.last_rendered_keys = tuple()
+
+    def select_single_name_slot(self) -> None:
+        rel = self.select_relative_name_region("Select the single-battle opponent name box")
+        if not rel:
+            self.status_var.set("Single name slot selection cancelled.")
+            return
+        self.single_name_region = rel
+        self.battle_slot_mode.set("single")
+        self.sync_active_name_regions()
+        self.reset_slot_detection_state()
+        self.status_var.set(f"Single name slot saved: {rel.w}×{rel.h} at +{rel.x},+{rel.y}. Double slots stay saved in this profile.")
         self.update_preview()
         self.render_detected(self.last_debug_lines, force=True)
 
+    def select_double_name_slots(self) -> None:
+        first = self.select_relative_name_region("Select double-battle Slot 1 name box")
+        if not first:
+            self.status_var.set("Double Slot 1 selection cancelled.")
+            return
+        second = self.select_relative_name_region("Select double-battle Slot 2 name box")
+        if not second:
+            self.status_var.set("Double Slot 2 selection cancelled. Previous double slots were not changed.")
+            return
+        self.double_name_regions = [first, second]
+        self.battle_slot_mode.set("double")
+        self.sync_active_name_regions()
+        self.reset_slot_detection_state()
+        self.status_var.set("Double name slots saved: Slot 1 and Slot 2. Single slot stays saved in this profile.")
+        self.update_preview()
+        self.render_detected(self.last_debug_lines, force=True)
+
+    def add_name_region(self) -> None:
+        # Backward-compatible command target for older guided-tour/profile code.
+        self.select_single_name_slot() if self.battle_slot_mode.get() == "single" else self.select_double_name_slots()
+
     def clear_name_regions(self) -> None:
-        self.name_regions.clear()
-        self.current_keys.clear()
-        self.slot_form_overrides.clear()
-        self.scan_histories.clear()
-        self.ocr_stabilizer.clear()
-        self.slot_miss_counts.clear()
-        self.auto_slot_pending.clear()
-        self.last_rendered_keys = tuple()
-        self.status_var.set("Name regions cleared. Auto top-left nameplate scan will be used.")
+        mode = (self.battle_slot_mode.get() or "single").lower()
+        if mode == "double":
+            self.double_name_regions = []
+            message = "Double name slots cleared. Single name slot remains saved."
+        else:
+            self.single_name_region = None
+            message = "Single name slot cleared. Double name slots remain saved."
+        self.sync_active_name_regions()
+        self.reset_slot_detection_state()
+        self.status_var.set(message + " Auto top-left nameplate scan will be used for the active mode until slots are set.")
         self.update_preview()
         self.render_detected(self.last_debug_lines, force=True)
 
@@ -1253,8 +1281,9 @@ class BattleMonitorApp:
         regions are present. When neither is configured, use the automatic
         top-left battle area so first-time setup can start from Window Region.
         """
+        self.sync_active_name_regions()
         if self.name_regions:
-            return sorted_name_regions([Rect(r.x, r.y, r.w, r.h) for r in self.name_regions])
+            return [Rect(r.x, r.y, r.w, r.h) for r in self.name_regions]
         return self.derive_regions_from_name_area()
 
     def has_tracking_regions(self) -> bool:
@@ -1361,6 +1390,7 @@ class BattleMonitorApp:
         if mode not in {"single", "double"}:
             mode = "single"
             self.battle_slot_mode.set(mode)
+        self.sync_active_name_regions()
         if mode == "single":
             # Singles should only keep the active opponent panel visible. Clear
             # stale double-battle slot state so old slot-2 misses do not linger.
@@ -3278,11 +3308,11 @@ class BattleMonitorApp:
                 "complete": lambda: self.game_region is not None,
             },
             {
-                "target": self.add_name_button,
-                "title": "2. Recommended name zones",
-                "body": "The app can auto-scan the top-left battle area, but tight Add Name zones are recommended for accuracy.",
-                "action_label": "Add Name Region",
-                "action": self.add_name_region,
+                "target": self.single_name_button,
+                "title": "2. Recommended name slots",
+                "body": "Use Singles for a one-opponent battle name box, or Doubles to select Slot 1 and Slot 2. Both setups save into the same game profile.",
+                "action_label": "Set Single Slot",
+                "action": self.select_single_name_slot,
                 "complete": self.has_any_name_tracking_region,
             },
             {
@@ -3335,6 +3365,7 @@ class BattleMonitorApp:
         return region == auto
 
     def has_precise_name_regions(self) -> bool:
+        self.sync_active_name_regions()
         if not self.game_region or not self.name_regions:
             return False
         return any(not self.is_auto_name_region(r) for r in self.name_regions)
@@ -3344,10 +3375,14 @@ class BattleMonitorApp:
 
     def setup_status_summary(self) -> str:
         region = "game region ready" if self.game_region else "no game region yet"
-        if self.name_regions:
-            names = f"{len(self.name_regions)} precise name region(s)"
+        self.sync_active_name_regions()
+        mode = (self.battle_slot_mode.get() or "single").lower()
+        if mode == "double" and self.double_name_regions:
+            names = f"double slots {len(self.double_name_regions)}/2 saved"
+        elif mode == "single" and self.single_name_region:
+            names = "single slot saved"
         else:
-            names = "auto top-left nameplate scan"
+            names = f"{mode} uses auto top-left nameplate scan"
         ocr = "OCR ready" if self.ocr.available else "OCR not ready"
         return f"Status: {region} • {names} • {ocr}"
 
@@ -3845,7 +3880,9 @@ class BattleMonitorApp:
     def profile_payload(self) -> dict:
         return {
             "game_region": self.game_region.to_dict() if self.game_region else None,
-            "name_regions": [r.to_dict() for r in sorted_name_regions(self.name_regions)],
+            "name_regions": [r.to_dict() for r in self.effective_name_regions()],
+            "single_name_region": self.single_name_region.to_dict() if self.single_name_region else None,
+            "double_name_regions": [r.to_dict() for r in self.double_name_regions[:2]],
             "name_scan_area": None,
             "threshold": int(float(self.threshold_var.get())),
             "preview_visible": bool(self.preview_visible.get()),
@@ -3863,7 +3900,17 @@ class BattleMonitorApp:
     def apply_profile_payload(self, payload: dict) -> None:
         game = payload.get("game_region")
         self.game_region = Rect.from_dict(game) if game else None
-        self.name_regions = sorted_name_regions([Rect.from_dict(r) for r in payload.get("name_regions", [])])
+        legacy_name_regions = [Rect.from_dict(r) for r in payload.get("name_regions", [])]
+        single_region = payload.get("single_name_region")
+        double_regions = payload.get("double_name_regions")
+        self.single_name_region = Rect.from_dict(single_region) if single_region else None
+        self.double_name_regions = [Rect.from_dict(r) for r in (double_regions or [])][:2]
+        if not self.single_name_region and not self.double_name_regions and legacy_name_regions:
+            legacy_sorted = sorted_name_regions(legacy_name_regions)
+            if len(legacy_sorted) >= 2:
+                self.double_name_regions = legacy_sorted[:2]
+            else:
+                self.single_name_region = legacy_sorted[0]
         # Name Area was removed from the UI. Keep the automatic top-left fallback,
         # but ignore old profile name_scan_area values so saved profiles do not
         # silently re-enable the broad custom mode.
@@ -3878,6 +3925,7 @@ class BattleMonitorApp:
             self.ultra_compact.set(bool(payload.get("ultra_compact")))
         mode = str(payload.get("battle_slot_mode") or "single").lower()
         self.battle_slot_mode.set(mode if mode in {"single", "double"} else "single")
+        self.sync_active_name_regions()
         if "auto_window_region" in payload:
             self.auto_window_region.set(bool(payload.get("auto_window_region")))
         self.attached_window_title = payload.get("attached_window_title", "") or ""

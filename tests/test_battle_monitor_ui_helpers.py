@@ -41,10 +41,63 @@ def test_topbar_has_compact_toggle_and_expanded_setup_may_overlap_game():
 def test_battle_slot_mode_source_has_double_slots_and_slot_ocr_fix():
     source = (BATTLE_MONITOR_DIR / "battle_monitor_app.py").read_text(encoding="utf-8")
     assert "self.battle_slot_mode" in source
-    assert "values=(\"single\", \"double\")" in source
+    assert "text=\"Singles\"" in source
+    assert "text=\"Doubles\"" in source
+    assert "single_name_region" in source
+    assert "double_name_regions" in source
     assert "Slot {slot_idx + 1}: {status}" in source
     assert "self.add_ocr_fix_dialog(s)" in source
     assert "battle_slot_mode" in source
+
+
+def test_active_name_regions_are_per_single_or_double_mode():
+    app = BattleMonitorApp.__new__(BattleMonitorApp)
+    single = Rect(10, 20, 120, 24)
+    double_1 = Rect(15, 30, 120, 24)
+    double_2 = Rect(15, 180, 120, 24)
+    app.single_name_region = single
+    app.double_name_regions = [double_1, double_2]
+    app.battle_slot_mode = SimpleNamespace(get=lambda: "single")
+    app.name_regions = []
+    app.sync_active_name_regions()
+    assert app.name_regions == [single]
+
+    app.battle_slot_mode = SimpleNamespace(get=lambda: "double")
+    app.sync_active_name_regions()
+    assert app.name_regions == [double_1, double_2]
+
+
+def test_legacy_name_regions_migrate_to_per_game_slot_storage():
+    app = BattleMonitorApp.__new__(BattleMonitorApp)
+    app.threshold_var = SimpleNamespace(set=lambda _value: None)
+    app.dock_on_start = SimpleNamespace(set=lambda _value: None)
+    app.dock_position = SimpleNamespace(set=lambda _value: None)
+    app.ultra_compact = SimpleNamespace(set=lambda _value: None)
+    app.battle_slot_mode = SimpleNamespace(get=lambda: "double", set=lambda _value: None)
+    app.auto_window_region = SimpleNamespace(set=lambda _value: None)
+    app.section_collapsed = {}
+    app.controls_visible = SimpleNamespace(get=lambda: True)
+    app.current_keys = {}
+    app.slot_form_overrides = {}
+    app.scan_histories = {}
+    app.ocr_stabilizer = TemporalMatchStabilizer()
+    app.slot_miss_counts = {}
+    app.auto_slot_pending = {}
+    app.last_rendered_keys = tuple()
+    app.preview_visible = SimpleNamespace(get=lambda: False)
+    app.update_preview = lambda: None
+    app.render_detected = lambda *_args, **_kwargs: None
+    app.toggle_controls_panel = lambda: None
+    app.toggle_preview = lambda: None
+    app.last_debug_lines = []
+
+    first = Rect(40, 90, 100, 20)
+    second = Rect(40, 180, 100, 20)
+    BattleMonitorApp.apply_profile_payload(app, {"name_regions": [second.to_dict(), first.to_dict()], "battle_slot_mode": "double"})
+
+    assert app.single_name_region is None
+    assert app.double_name_regions == [first, second]
+    assert app.name_regions == [first, second]
 
 
 def test_expected_battle_slots_uses_single_or_double_mode():

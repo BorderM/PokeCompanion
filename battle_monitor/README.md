@@ -359,9 +359,10 @@ Installer version: 0.19
 
 - Toggling `Compact` while controls are hidden now re-runs docking instead of resizing in place, keeping the companion flush beside the selected game window instead of overlapping the emulator.
 
-## v38 battle slot mode and visible slot OCR fixes
+## v39 per-game single/double name slots
 
-- Added a `Battle slots` selector for `single` vs `double` battle setups.
-- Single mode keeps one opponent slot visible; double mode keeps two slot panels visible so missing/unclear OCR in one slot is obvious.
-- The information panel now shows slot-specific `OCR Fix` buttons on detected Pokémon cards and unclear slot cards, prefilled from that slot's recent OCR text when available.
-- Profiles now save and reload the selected battle slot mode.
+- Profiles now keep single-battle and double-battle name slots in the same game profile instead of making the profile effectively single-or-double only.
+- The setup panel has a `Name Slots` area with `Singles` and `Doubles` buttons. `Singles` overwrites the one single-battle name slot; `Doubles` guides Slot 1 then Slot 2 and overwrites the saved double-battle slots only after both are selected.
+- Switching the `single`/`double` dropdown chooses which saved slot setup is active without deleting the other setup.
+- Legacy profiles with old `name_regions` migrate into the new per-game slot storage.
+- Slot-specific `OCR Fix` remains visible on detected cards as well as unclear slot cards.
