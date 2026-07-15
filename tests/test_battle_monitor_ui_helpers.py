@@ -50,7 +50,6 @@ def test_battle_slot_mode_source_has_double_slots_and_slot_ocr_fix():
     assert "self.add_ocr_fix_dialog(s)" in source
     assert "program-wide and apply before fuzzy matching in every profile/game" in source
     assert "after_render_signature != self.last_rendered_keys" in source
-    assert "self.battle_slot_mode.set(\"double\")" in source
     assert "battle_slot_mode" in source
 
 
@@ -86,8 +85,13 @@ def test_auto_battle_layout_prefers_detected_double_slots():
     app.update_auto_battle_layout({0: ["Roselia"], 1: ["Volbeat"]})
     assert mode["value"] == "double"
 
+    app.current_keys = {}
+    mode["value"] = "single"
+    app.update_auto_battle_layout({})
+    assert mode["value"] == "single"
 
-def test_double_slot_selection_immediately_switches_visible_layout_to_double():
+
+def test_double_slot_selection_only_saves_crops_and_does_not_choose_layout():
     app = BattleMonitorApp.__new__(BattleMonitorApp)
     first = Rect(40, 90, 100, 20)
     second = Rect(40, 180, 100, 20)
@@ -113,10 +117,14 @@ def test_double_slot_selection_immediately_switches_visible_layout_to_double():
 
     app.select_double_name_slots()
 
-    assert mode["value"] == "double"
+    assert mode["value"] == "single"
     assert app.double_name_regions == [first, second]
     assert app.name_region_slots == [0, 1, 2]
     assert app.current_keys == {}
+
+    app.current_keys = {}
+    app.update_auto_battle_layout({1: ["Volbeat"], 2: ["Illumise"]})
+    assert mode["value"] == "double"
     assert app.expected_battle_slots() == [1, 2]
 
 
