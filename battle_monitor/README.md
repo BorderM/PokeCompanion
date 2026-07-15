@@ -359,10 +359,10 @@ Installer version: 0.19
 
 - Toggling `Compact` while controls are hidden now re-runs docking instead of resizing in place, keeping the companion flush beside the selected game window instead of overlapping the emulator.
 
-## v39 per-game single/double name slots
+## v40 automatic single/double layout detection
 
-- Profiles now keep single-battle and double-battle name slots in the same game profile instead of making the profile effectively single-or-double only.
-- The setup panel has a `Name Slots` area with `Singles` and `Doubles` buttons. `Singles` overwrites the one single-battle name slot; `Doubles` guides Slot 1 then Slot 2 and overwrites the saved double-battle slots only after both are selected.
-- Switching the `single`/`double` dropdown chooses which saved slot setup is active without deleting the other setup.
-- Legacy profiles with old `name_regions` migrate into the new per-game slot storage.
-- Slot-specific `OCR Fix` remains visible on detected cards as well as unclear slot cards.
+- Removed the visible `single`/`double` selector. Saved single and double name slots are all scan-active at the same time.
+- If the Singles slot produces the confident read, the information panel shows the one single-battle card. If either Doubles slot produces OCR text/a confident read, the panel switches to the two double-battle slot cards.
+- The `Name Slots` area now keeps `Singles`, `Doubles`, and `Clear Slots`; profiles still store the one single slot plus the two double slots for the same game.
+- Slot labels now display doubles as Slot 1/Slot 2 even though the scanner keeps an internal Singles slot as slot 0.
+- OCR fixes are explicitly program-wide: they are saved to the shared OCR corrections file and apply before fuzzy matching in every profile/game, not only the current profile.

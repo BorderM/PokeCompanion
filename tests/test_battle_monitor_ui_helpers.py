@@ -45,26 +45,40 @@ def test_battle_slot_mode_source_has_double_slots_and_slot_ocr_fix():
     assert "text=\"Doubles\"" in source
     assert "single_name_region" in source
     assert "double_name_regions" in source
-    assert "Slot {slot_idx + 1}: {status}" in source
+    assert "battle_slot_mode_dropdown" not in source
+    assert "Slot {self.slot_display_number(slot_idx)}: {status}" in source
     assert "self.add_ocr_fix_dialog(s)" in source
+    assert "program-wide and apply before fuzzy matching in every profile/game" in source
     assert "battle_slot_mode" in source
 
 
-def test_active_name_regions_are_per_single_or_double_mode():
+def test_all_saved_name_regions_stay_scan_active():
     app = BattleMonitorApp.__new__(BattleMonitorApp)
     single = Rect(10, 20, 120, 24)
     double_1 = Rect(15, 30, 120, 24)
     double_2 = Rect(15, 180, 120, 24)
     app.single_name_region = single
     app.double_name_regions = [double_1, double_2]
-    app.battle_slot_mode = SimpleNamespace(get=lambda: "single")
     app.name_regions = []
+    app.name_region_slots = []
     app.sync_active_name_regions()
-    assert app.name_regions == [single]
+    assert app.name_regions == [single, double_1, double_2]
+    assert app.name_region_slots == [0, 1, 2]
 
-    app.battle_slot_mode = SimpleNamespace(get=lambda: "double")
-    app.sync_active_name_regions()
-    assert app.name_regions == [double_1, double_2]
+
+def test_auto_battle_layout_prefers_detected_double_slots():
+    app = BattleMonitorApp.__new__(BattleMonitorApp)
+    app.single_name_region = Rect(10, 20, 120, 24)
+    app.double_name_regions = [Rect(15, 30, 120, 24), Rect(15, 180, 120, 24)]
+    mode = {"value": "single"}
+    app.battle_slot_mode = SimpleNamespace(get=lambda: mode["value"], set=lambda value: mode.__setitem__("value", value))
+    app.current_keys = {1: "pikachu"}
+    app.update_auto_battle_layout({1: ["Pikachu"]})
+    assert mode["value"] == "double"
+
+    app.current_keys = {0: "pikachu"}
+    app.update_auto_battle_layout({0: ["Pikachu"]})
+    assert mode["value"] == "single"
 
 
 def test_legacy_name_regions_migrate_to_per_game_slot_storage():
@@ -100,18 +114,13 @@ def test_legacy_name_regions_migrate_to_per_game_slot_storage():
     assert app.name_regions == [first, second]
 
 
-def test_expected_battle_slots_uses_single_or_double_mode():
+def test_expected_battle_slots_uses_detected_single_or_double_layout():
     app = BattleMonitorApp.__new__(BattleMonitorApp)
-    app.current_keys = {}
-    app.last_slot_attempt_texts = {}
     app.battle_slot_mode = SimpleNamespace(get=lambda: "single")
     assert app.expected_battle_slots() == [0]
 
     app.battle_slot_mode = SimpleNamespace(get=lambda: "double")
-    assert app.expected_battle_slots() == [0, 1]
-
-    app.current_keys = {2: "pikachu"}
-    assert app.expected_battle_slots() == [0, 1, 2]
+    assert app.expected_battle_slots() == [1, 2]
 
 
 def test_mark_slot_miss_clears_stale_detected_card_after_threshold():
