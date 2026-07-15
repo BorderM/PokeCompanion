@@ -1185,6 +1185,7 @@ class BattleMonitorApp:
             self.status_var.set("Single name slot selection cancelled.")
             return
         self.single_name_region = rel
+        self.battle_slot_mode.set("single")
         self.sync_active_name_regions()
         self.reset_slot_detection_state()
         self.status_var.set(f"Single name slot saved: {rel.w}×{rel.h} at +{rel.x},+{rel.y}. Double slots stay saved and scan-active in this profile.")
@@ -1201,6 +1202,7 @@ class BattleMonitorApp:
             self.status_var.set("Double Slot 2 selection cancelled. Previous double slots were not changed.")
             return
         self.double_name_regions = [first, second]
+        self.battle_slot_mode.set("double")
         self.sync_active_name_regions()
         self.reset_slot_detection_state()
         self.status_var.set("Double name slots saved: Slot 1 and Slot 2. Single slot stays saved and scan-active in this profile.")

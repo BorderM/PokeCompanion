@@ -50,6 +50,7 @@ def test_battle_slot_mode_source_has_double_slots_and_slot_ocr_fix():
     assert "self.add_ocr_fix_dialog(s)" in source
     assert "program-wide and apply before fuzzy matching in every profile/game" in source
     assert "after_render_signature != self.last_rendered_keys" in source
+    assert "self.battle_slot_mode.set(\"double\")" in source
     assert "battle_slot_mode" in source
 
 
@@ -84,6 +85,39 @@ def test_auto_battle_layout_prefers_detected_double_slots():
     app.current_keys = {0: "roselia"}
     app.update_auto_battle_layout({0: ["Roselia"], 1: ["Volbeat"]})
     assert mode["value"] == "double"
+
+
+def test_double_slot_selection_immediately_switches_visible_layout_to_double():
+    app = BattleMonitorApp.__new__(BattleMonitorApp)
+    first = Rect(40, 90, 100, 20)
+    second = Rect(40, 180, 100, 20)
+    selections = iter([first, second])
+    mode = {"value": "single"}
+    app.select_relative_name_region = lambda _title: next(selections)
+    app.battle_slot_mode = SimpleNamespace(get=lambda: mode["value"], set=lambda value: mode.__setitem__("value", value))
+    app.single_name_region = Rect(10, 20, 120, 24)
+    app.double_name_regions = []
+    app.name_regions = []
+    app.name_region_slots = []
+    app.current_keys = {0: "roselia"}
+    app.slot_form_overrides = {}
+    app.scan_histories = {}
+    app.ocr_stabilizer = TemporalMatchStabilizer()
+    app.slot_miss_counts = {}
+    app.auto_slot_pending = {}
+    app.last_rendered_keys = ("stale",)
+    app.status_var = SimpleNamespace(set=lambda _value: None)
+    app.update_preview = lambda: None
+    app.render_detected = lambda *_args, **_kwargs: None
+    app.last_debug_lines = []
+
+    app.select_double_name_slots()
+
+    assert mode["value"] == "double"
+    assert app.double_name_regions == [first, second]
+    assert app.name_region_slots == [0, 1, 2]
+    assert app.current_keys == {}
+    assert app.expected_battle_slots() == [1, 2]
 
 
 def test_legacy_name_regions_migrate_to_per_game_slot_storage():

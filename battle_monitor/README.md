@@ -362,7 +362,7 @@ Installer version: 0.19
 ## v40 automatic single/double layout detection
 
 - Removed the visible `single`/`double` selector. Saved single and double name slots are all scan-active at the same time.
-- If the Singles slot produces the confident read, the information panel shows the one single-battle card. If either Doubles slot produces OCR text/a confident read, the panel switches to the two double-battle slot cards.
+- If the Singles slot produces the confident read, the information panel shows the one single-battle card. If either Doubles slot produces OCR text/a confident read, the panel switches to the two double-battle slot cards. Selecting `Doubles` during setup also immediately switches the visible layout to the two double cards, so a stale Singles card cannot hide the newly configured double slots.
 - The `Name Slots` area now keeps `Singles`, `Doubles`, and `Clear Slots`; profiles still store the one single slot plus the two double slots for the same game.
 - Slot labels now display doubles as Slot 1/Slot 2 even though the scanner keeps an internal Singles slot as slot 0.
 - OCR fixes are explicitly program-wide: they are saved to the shared OCR corrections file and apply before fuzzy matching in every profile/game, not only the current profile.
