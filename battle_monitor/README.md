@@ -368,3 +368,9 @@ Installer version: 0.19
 - The `Name Slots` area now keeps `Singles`, `Doubles`, and `Clear Slots`; profiles still store the one single slot plus the two double slots for the same game.
 - Slot labels now display doubles as Slot 1/Slot 2 even though the scanner keeps an internal Singles slot as slot 0.
 - OCR fixes are explicitly program-wide: they are saved to the shared OCR corrections file and apply before fuzzy matching in every profile/game, not only the current profile.
+
+## v41 scale-aware Pokémon-name OCR preparation
+
+- Added a lightweight precomputed OCR alias index built from the local Pokémon whitelist. Known names now prepare likely pixel-font/scale artifacts ahead of time, so stable reads like `Roselig` can resolve to Roselia and `Hreanine` can resolve to Arcanine before broad fuzzy matching has to guess.
+- The alias index is generated in memory at startup from existing local data; it does not add a large model, training dataset, or storage-heavy template cache.
+- Added extra nearest-neighbour OCR scale fallbacks for tight name strips. The live scanner still tries the highest-value fast variants first, but it now has 6x/4x/3x preprocessing options for games or emulator settings that render names at different apparent sizes.
