@@ -196,6 +196,13 @@ class OcrEngine:
         variants.append((f"nearest_threshold_120_{scale}x", resized.point(lambda p: 255 if p > 120 else 0)))
         variants.append((f"nearest_threshold_150_{scale}x", resized.point(lambda p: 255 if p > 150 else 0)))
         variants.append((f"nearest_gray_{scale}x", resized))
+        fallback_scales = (4, 3) if fast else (3, 6)
+        for fallback_scale in fallback_scales:
+            if fallback_scale == scale:
+                continue
+            fallback = base.resize((max(1, base.width * fallback_scale), max(1, base.height * fallback_scale)), Image.Resampling.NEAREST)
+            variants.append((f"scale_gray_{fallback_scale}x", fallback))
+            variants.append((f"scale_threshold_150_{fallback_scale}x", fallback.point(lambda p: 255 if p > 150 else 0)))
         if not fast:
             variants.append((f"nearest_threshold_190_{scale}x", resized.point(lambda p: 255 if p > 190 else 0)))
             variants.append((f"nearest_threshold_210_{scale}x", resized.point(lambda p: 255 if p > 210 else 0)))

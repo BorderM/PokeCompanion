@@ -55,6 +55,52 @@ def slug(value: str) -> str:
     return value
 
 
+def build_known_name_ocr_aliases(name: str) -> List[str]:
+    """Precompute likely OCR-shaped aliases for a known Pokémon name.
+
+    The live OCR still reads pixels with Tesseract. This helper gives the
+    matcher a small whitelist-derived safety net for scale/pixel-font artifacts
+    that consistently distort otherwise known names.
+    """
+    normalized = normalize_name(name)
+    aliases: List[str] = []
+
+    def add(value: str) -> None:
+        value = re.sub(r"\s+", " ", value or "").strip()
+        if value and len(re.sub(r"[^A-Z]", "", value)) >= 4 and value not in aliases:
+            aliases.append(value)
+
+    add(normalized)
+    compact = re.sub(r"[^A-Z]", "", normalized)
+    add(compact)
+    seeds = list(aliases)
+    for seed in seeds:
+        compact_seed = re.sub(r"[^A-Z]", "", seed)
+        if len(compact_seed) < 4:
+            continue
+        # Terminal A can look like a closed G/Q in small scaled pixel fonts.
+        if compact_seed.endswith("A"):
+            add(compact_seed[:-1] + "G")
+        if compact_seed.endswith("IA"):
+            add(compact_seed[:-2] + "IG")
+        # Tall strokes swap frequently after nearest-neighbour emulator scaling.
+        if "I" in compact_seed:
+            add(compact_seed.replace("I", "L"))
+        if "L" in compact_seed:
+            add(compact_seed.replace("L", "I"))
+        # rn/m ambiguity already appears in OCR output repair; precompute it for
+        # known names too so exact alias lookup can catch it before fuzzy match.
+        if "RN" in compact_seed:
+            add(compact_seed.replace("RN", "M"))
+        if "M" in compact_seed and len(compact_seed) >= 5:
+            add(compact_seed.replace("M", "RN"))
+        # Arcanine-style rounded A/R/C strokes can be read as H/R/E in the small
+        # GBA/DS/fan-game nameplates the monitor sees.
+        if compact_seed.startswith("ARCA"):
+            add("HREA" + compact_seed[4:])
+    return aliases
+
+
 @dataclass(frozen=True)
 class MatchResult:
     key: str
@@ -76,6 +122,7 @@ class PokemonRepository:
         self.forms_by_species: Dict[str, List[str]] = {}
         self.candidates: List[str] = []
         self.candidate_to_key: Dict[str, str] = {}
+        self.ocr_alias_to_candidate: Dict[str, str] = {}
         self._profile_index: Dict[str, Any] = {}
         self._loaded_shards: Dict[str, Dict[str, Any]] = {}
         self.load()
@@ -119,6 +166,7 @@ class PokemonRepository:
                 seen.add(c)
                 deduped.append(c)
         self.candidates = deduped
+        self._build_ocr_alias_index()
 
         # Group all local forms by base species so the monitor can offer a
         # manual form selector. This matters for regional/forms where the game
@@ -157,6 +205,27 @@ class PokemonRepository:
         # appearing on both the base form and Mega form. Exact form candidates
         # such as "Garchomp Mega" remain separate and still resolve to that form.
         self.candidate_to_key.setdefault(normal, key)
+
+    def _build_ocr_alias_index(self) -> None:
+        """Build a small exact-lookup map of likely OCR distortions to names."""
+        alias_to_candidate: Dict[str, str] = {}
+        ambiguous_aliases: set[str] = set()
+        for candidate in self.candidates:
+            key = self.candidate_to_key.get(candidate)
+            if not key:
+                continue
+            for alias in build_known_name_ocr_aliases(candidate):
+                if alias in self.candidate_to_key:
+                    # Exact known names are handled before alias lookup.
+                    continue
+                existing = alias_to_candidate.get(alias)
+                if existing and self.candidate_to_key.get(existing) != key:
+                    ambiguous_aliases.add(alias)
+                    alias_to_candidate.pop(alias, None)
+                    continue
+                if alias not in ambiguous_aliases:
+                    alias_to_candidate[alias] = candidate
+        self.ocr_alias_to_candidate = alias_to_candidate
 
     def _make_match(self, candidate: str, score: float, raw_text: str, normalized: str) -> Optional[MatchResult]:
         key = self.candidate_to_key.get(candidate)
@@ -261,6 +330,15 @@ class PokemonRepository:
         for value in candidates_to_try:
             if value in self.candidate_to_key:
                 return self._make_match(value, 100.0, raw_text, normalized)
+
+        # Precomputed known-name aliases catch stable scale/pixel-font OCR shapes
+        # such as Roselia -> ROSELIG before broad fuzzy matching has to guess.
+        for value in candidates_to_try:
+            alias_candidate = self.ocr_alias_to_candidate.get(value)
+            if alias_candidate:
+                match = self._make_match(alias_candidate, 97.0, raw_text, normalized)
+                if match and match.score >= min_score:
+                    return match
 
         # Do not fuzzy-match tiny fragments. When there is no Pokémon name on
         # screen, OCR often returns scraps like "1", "WW", "I WW", or short

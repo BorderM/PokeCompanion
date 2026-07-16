@@ -5,7 +5,7 @@ from pathlib import Path
 
 from PIL import Image
 
-from battle_monitor.ocr_engine import OcrAttempt
+from battle_monitor.ocr_engine import OcrAttempt, OcrEngine
 from battle_monitor.ocr_quality import (
     OcrFailureRecorder,
     OcrSampleCase,
@@ -13,7 +13,7 @@ from battle_monitor.ocr_quality import (
     TemporalMatchStabilizer,
     build_ocr_text_variants,
 )
-from battle_monitor.pokemon_repository import MatchResult, normalize_name
+from battle_monitor.pokemon_repository import MatchResult, PokemonRepository, build_known_name_ocr_aliases, normalize_name
 
 
 class TinyRepo:
@@ -32,6 +32,49 @@ def test_build_ocr_text_variants_includes_common_pixel_font_repairs():
     assert "FERALIGATR" in variants
     assert "FERALIGATM" in variants
     assert all("HP" not in v for v in variants[:8])
+
+
+def test_build_known_name_ocr_aliases_prepares_scaled_pixel_font_shapes():
+    roselia_aliases = build_known_name_ocr_aliases("Roselia")
+    arcanine_aliases = build_known_name_ocr_aliases("Arcanine")
+
+    assert "ROSELIG" in roselia_aliases
+    assert "ROSELIA" in roselia_aliases
+    assert "HREANINE" in arcanine_aliases
+
+
+def test_repository_matches_precomputed_known_name_ocr_aliases_before_fuzzy_cutoff():
+    repo = PokemonRepository.__new__(PokemonRepository)
+    repo.pokemon = {
+        "roselia": {"display_name": "Roselia"},
+        "arcanine": {"display_name": "Arcanine"},
+    }
+    repo.candidates = []
+    repo.candidate_to_key = {}
+    repo.ocr_alias_to_candidate = {}
+    repo._add_candidate("Roselia", "roselia")
+    repo._add_candidate("Arcanine", "arcanine")
+    repo._build_ocr_alias_index()
+
+    roselia = repo.match_name("Roselig", min_score=96)
+    arcanine = repo.match_name("Hreanine", min_score=96)
+
+    assert roselia is not None
+    assert roselia.key == "roselia"
+    assert roselia.score >= 96
+    assert arcanine is not None
+    assert arcanine.key == "arcanine"
+    assert arcanine.score >= 96
+
+def test_ocr_preprocess_variants_include_multiple_scale_fallbacks():
+    engine = OcrEngine.__new__(OcrEngine)
+    image = Image.new("RGB", (72, 18), "white")
+
+    names = [name for name, _img in engine.preprocess_variants(image, fast=True)]
+
+    assert any(name.endswith("_6x") for name in names)
+    assert any(name.endswith("_4x") for name in names)
+    assert any(name.endswith("_3x") for name in names)
 
 
 def test_temporal_match_stabilizer_requires_repeat_for_medium_confidence():
